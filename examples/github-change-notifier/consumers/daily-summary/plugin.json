@@ -1,0 +1,20 @@
+{
+  "id": "github.daily-summary",
+  "kind": "consumer",
+  "entry": "index.mjs",
+  "config": {
+    "geminiBaseUrl": "https://generativelanguage.googleapis.com",
+    "geminiModel": "gemini-2.5-flash",
+    "notification": {
+      "command": "/usr/bin/osascript"
+    }
+  },
+  "env": {
+    "GEMINI_API_KEY": "GEMINI_API_KEY"
+  },
+  "trigger": {
+    "type": "daily",
+    "at": "09:00",
+    "timezone": "Asia/Tokyo"
+  }
+}

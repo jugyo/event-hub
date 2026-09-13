@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "paths": {
+    "sources": "sources",
+    "consumers": "consumers",
+    "data": ".event-hub"
+  },
+  "pluginManifest": "plugin.json",
+  "sourceDefaults": {
+    "backfill": "24h"
+  },
+  "secrets": {}
+}

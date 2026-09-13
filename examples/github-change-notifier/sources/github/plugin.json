@@ -1,0 +1,18 @@
+{
+  "id": "github.commits",
+  "kind": "source",
+  "entry": "index.mjs",
+  "config": {
+    "repository": "octocat/Hello-World",
+    "apiBaseUrl": "https://api.github.com",
+    "perPage": 100
+  },
+  "env": {
+    "GITHUB_TOKEN": "WORK_GITHUB_TOKEN"
+  },
+  "trigger": {
+    "type": "poll",
+    "everyMs": 300000,
+    "backfillMs": 86400000
+  }
+}

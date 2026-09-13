@@ -1,0 +1,36 @@
+{
+  "name": "event-hub",
+  "version": "0.1.0",
+  "description": "A local event collection and processing service",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "bin": {
+    "event-hub": "./dist/src/cli.js"
+  },
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
+  "files": [
+    "dist/",
+    "examples/",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "pretest": "node scripts/build-linked-duex.mjs",
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "test:keychain": "EH_KEYCHAIN_TEST=1 node --test --experimental-strip-types test/keychain-opt-in.test.ts",
+    "test:pack": "node --test --experimental-strip-types test/package.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@jugyo/duex": "file:../mini-restate",
+    "typescript": "^5.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}
