@@ -19,6 +19,7 @@ npm test
 Install the package, then initialize a project directory:
 
 ```console
+npm install --global @jugyo/event-hub
 event-hub init
 event-hub init "/path/to/project"
 ```

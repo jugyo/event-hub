@@ -77,7 +77,7 @@ import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promise
 import { join } from "node:path";
 import {
   EventStore, SecretService, initProject, openProjectRuntime, projectStatus, tickProject,
-} from "event-hub";
+} from "@jugyo/event-hub";
 
 const root = process.argv[2];
 const hidden = "acceptance-secret-must-not-be-persisted";
