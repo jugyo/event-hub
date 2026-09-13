@@ -2,6 +2,16 @@
   "name": "event-hub",
   "version": "0.1.0",
   "description": "A local event collection and processing service",
+  "license": "MIT",
+  "author": "Kaz <kkohno@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jugyo/event-hub.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jugyo/event-hub/issues"
+  },
+  "homepage": "https://github.com/jugyo/event-hub#readme",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"

@@ -133,4 +133,8 @@ npm run test:keychain
 - Stored events are retained indefinitely. The default 24-hour source backfill limit only controls collection from external systems.
 - The initial release supports polling sources and daily consumers, not webhooks or file watching.
 
+## License
+
+[MIT](LICENSE)
+
 See [REQUIREMENTS.md](REQUIREMENTS.md) for the source-of-truth requirements.
