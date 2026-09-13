@@ -6,13 +6,10 @@
 
 - Node.js 24 or later
 - macOS for Keychain and LaunchAgent support
-- A sibling `../mini-restate` checkout while `@jugyo/duex` is referenced through `file:../mini-restate`
 
 ## Development setup
 
 ```console
-npm --prefix ../mini-restate install
-npm --prefix ../mini-restate run build
 npm install
 npm test
 ```

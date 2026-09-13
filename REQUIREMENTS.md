@@ -6,7 +6,7 @@ This document is the source of truth for generalizing the GitHub Change Notifier
 
 Make it easy to build and operate local applications that react to events.
 
-The platform continues to use `@jugyo/duex`. It is an independent project and must not be copied into this repository. During migration it is resolved from the adjacent checkout through `file:../mini-restate`; later this will become a published npm version range. The event-hub package must not bundle the `@jugyo/duex` source or distribution files.
+The platform continues to use the published `@jugyo/duex` package. It is an independent project and must not be copied into this repository. The event-hub package must not bundle the `@jugyo/duex` source or distribution files.
 
 The shared platform owns event storage, delivery, scheduling, and retries so plugins can focus on collecting or processing data.
 

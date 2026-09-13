@@ -7,10 +7,6 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-// During migration, @jugyo/duex is an external package resolved through file:../mini-restate,
-// so its tarball is also built from the adjacent checkout.
-const duexRoot = resolve(repositoryRoot, "..", "mini-restate");
-
 function run(command: string, args: string[], cwd: string) {
   return spawnSync(command, args, { cwd, encoding: "utf8" });
 }
@@ -31,12 +27,10 @@ test("installs the packed package and initializes a directory containing spaces"
   const temporaryRoot = await mkdtemp(join(tmpdir(), "event-hub package "));
   try {
     const tarball = pack(repositoryRoot, temporaryRoot);
-    const duexTarball = pack(duexRoot, temporaryRoot);
-
     const installRoot = join(temporaryRoot, "installed application");
     const projectRoot = join(temporaryRoot, "project with spaces");
     await writeFile(join(temporaryRoot, "package.json"), "{}\n");
-    const install = run("npm", ["install", "--prefix", installRoot, duexTarball, tarball], temporaryRoot);
+    const install = run("npm", ["install", "--prefix", installRoot, tarball], temporaryRoot);
     assert.equal(install.status, 0, install.stderr);
 
     const duexImport = run(
@@ -62,9 +56,6 @@ test("installs the packed package and initializes a directory containing spaces"
     assert.doesNotMatch(packageFiles.stdout, /package\/dist\/src\/mini-restate\.js/);
     assert.doesNotMatch(packageFiles.stdout, /package\/dist\/mini-restate\//);
 
-    const duexFiles = run("tar", ["-tf", duexTarball], temporaryRoot);
-    assert.equal(duexFiles.status, 0, duexFiles.stderr);
-    assert.match(duexFiles.stdout, /package\/dist\/src\/index\.js/);
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
@@ -74,10 +65,9 @@ test("runs the primary operational scenario using only packed packages", async (
   const temporaryRoot = await mkdtemp(join(tmpdir(), "event-hub acceptance "));
   try {
     const tarball = pack(repositoryRoot, temporaryRoot);
-    const duexTarball = pack(duexRoot, temporaryRoot);
     const installRoot = join(temporaryRoot, "clean installed application");
     const projectRoot = join(temporaryRoot, "operated project");
-    const install = run("npm", ["install", "--prefix", installRoot, duexTarball, tarball], temporaryRoot);
+    const install = run("npm", ["install", "--prefix", installRoot, tarball], temporaryRoot);
     assert.equal(install.status, 0, install.stderr);
 
     const runner = join(installRoot, "acceptance.mjs");
