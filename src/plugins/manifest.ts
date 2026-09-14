@@ -16,9 +16,7 @@ export interface SourcePluginManifest extends PluginManifestBase {
 
 export interface ConsumerPluginManifest extends PluginManifestBase {
   kind: "consumer";
-  trigger:
-    | { type: "events"; eventTypes: string[] }
-    | { type: "daily"; at: string; timezone: string };
+  trigger: { type: "events"; eventTypes: string[] } | { type: "daily"; at: string; timezone: string };
 }
 
 export type PluginManifest = SourcePluginManifest | ConsumerPluginManifest;

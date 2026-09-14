@@ -89,9 +89,8 @@ export async function run(argv = process.argv.slice(2), dependencies = defaultDe
   const { positionals, root, json, debug, maxRuns } = parsed;
   const [command, subject, name, ...extra] = positionals;
   const projectRoot = resolve(root ?? dependencies.projectRoot);
-  const backend = dependencies.backend
-    ?? dependencies.createBackend?.(projectRoot)
-    ?? new KeychainSecretBackend({ projectRoot });
+  const backend =
+    dependencies.backend ?? dependencies.createBackend?.(projectRoot) ?? new KeychainSecretBackend({ projectRoot });
   const secrets = new SecretService(projectRoot, backend);
 
   try {
@@ -107,31 +106,52 @@ export async function run(argv = process.argv.slice(2), dependencies = defaultDe
         ? new JsonLogger({ level, write: dependencies.error })
         : new TextLogger({ level, write: dependencies.out });
       const result = await tickProject(projectRoot, secrets, maxRuns, logger);
-      dependencies.out(json ? JSON.stringify(result) : `Tick complete: ${result.runs.length} run(s), ${result.materialized.length} invocation(s) created${result.skipped ? " (another runner is active)" : ""}`);
+      dependencies.out(
+        json
+          ? JSON.stringify(result)
+          : `Tick complete: ${result.runs.length} run(s), ${result.materialized.length} invocation(s) created${result.skipped ? " (another runner is active)" : ""}`,
+      );
       return 0;
     }
     if (command === "status" && subject === undefined) {
       const statuses = await projectStatus(projectRoot, secrets);
       if (json) dependencies.out(JSON.stringify({ plugins: statuses }));
       else if (statuses.length === 0) dependencies.out("No plugins found");
-      else for (const status of statuses) dependencies.out([
-        status.id, status.kind, status.state,
-        `lastRun=${status.lastRunAt ?? "-"}`, `invocation=${status.lastInvocationId ?? "-"}`, `pending=${status.pending}`,
-        ...(status.failure ? [`failure=${status.failure}`] : []),
-      ].join("\t"));
+      else
+        for (const status of statuses)
+          dependencies.out(
+            [
+              status.id,
+              status.kind,
+              status.state,
+              `lastRun=${status.lastRunAt ?? "-"}`,
+              `invocation=${status.lastInvocationId ?? "-"}`,
+              `pending=${status.pending}`,
+              ...(status.failure ? [`failure=${status.failure}`] : []),
+            ].join("\t"),
+          );
       return 0;
     }
     if (command === "invocation" && (subject === "retry" || subject === "cancel") && name && extra.length === 0) {
       const invocation = await updateInvocation(projectRoot, secrets, subject, name);
-      dependencies.out(json ? JSON.stringify(invocation) : `Invocation ${name} ${subject === "retry" ? "was scheduled for retry" : "was cancelled"}`);
+      dependencies.out(
+        json
+          ? JSON.stringify(invocation)
+          : `Invocation ${name} ${subject === "retry" ? "was scheduled for retry" : "was cancelled"}`,
+      );
       return 0;
     }
     if (command === "launch-agent" && (subject === "register" || subject === "unregister") && name === undefined) {
       const executable = dependencies.executable ?? (process.argv[1] ? realpathSync(process.argv[1]) : "event-hub");
       const options = {
-        projectRoot, executable, nodeExecutable: dependencies.nodeExecutable ?? process.execPath,
-        home: dependencies.home, launchctl: dependencies.launchctl, uid: dependencies.uid,
-        runCommand: dependencies.runLaunchctl, debug,
+        projectRoot,
+        executable,
+        nodeExecutable: dependencies.nodeExecutable ?? process.execPath,
+        home: dependencies.home,
+        launchctl: dependencies.launchctl,
+        uid: dependencies.uid,
+        runCommand: dependencies.runLaunchctl,
+        debug,
       };
       const result = subject === "register" ? await registerLaunchAgent(options) : await unregisterLaunchAgent(options);
       dependencies.out(`LaunchAgent ${subject === "register" ? "registered" : "unregistered"}: ${result.label}`);
@@ -163,7 +183,13 @@ export async function run(argv = process.argv.slice(2), dependencies = defaultDe
   }
 }
 
-function parseOptions(argv: string[]): { positionals: string[]; root?: string; json: boolean; debug: boolean; maxRuns?: number } | null {
+function parseOptions(argv: string[]): {
+  positionals: string[];
+  root?: string;
+  json: boolean;
+  debug: boolean;
+  maxRuns?: number;
+} | null {
   const positionals: string[] = [];
   let root: string | undefined;
   let maxRuns: number | undefined;
@@ -171,9 +197,19 @@ function parseOptions(argv: string[]): { positionals: string[]; root?: string; j
   let debug = false;
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
-    if (value === "--json") { json = true; continue; }
-    if (value === "--debug") { debug = true; continue; }
-    if (value === "--root") { root = argv[++index]; if (!root) return null; continue; }
+    if (value === "--json") {
+      json = true;
+      continue;
+    }
+    if (value === "--debug") {
+      debug = true;
+      continue;
+    }
+    if (value === "--root") {
+      root = argv[++index];
+      if (!root) return null;
+      continue;
+    }
     if (value === "--max-runs") {
       const raw = argv[++index];
       maxRuns = Number(raw);

@@ -24,6 +24,8 @@ const validManifests = [
   },
 ] satisfies PluginManifest[];
 
+// This unreachable block exists only for compile-time contract assertions.
+// eslint-disable-next-line no-constant-condition
 if (false) {
   const sourceWithEvents: PluginManifest = {
     ...base,

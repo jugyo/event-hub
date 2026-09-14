@@ -78,9 +78,7 @@ const MAX_TEXT_LENGTH = 120;
 function text(value: Json): string {
   const raw = typeof value === "string" ? value : String(value);
   const singleLine = raw.replace(/\s+/gu, " ").trim();
-  return singleLine.length > MAX_TEXT_LENGTH
-    ? `${singleLine.slice(0, MAX_TEXT_LENGTH - 1)}…`
-    : singleLine;
+  return singleLine.length > MAX_TEXT_LENGTH ? `${singleLine.slice(0, MAX_TEXT_LENGTH - 1)}…` : singleLine;
 }
 
 function time(epochMs: number): string {
@@ -100,19 +98,11 @@ function details(fields: Record<string, Json>): string {
 
 function echoesCallerLine(event: string, fields: Record<string, Json>): boolean {
   if (event === "tick.finished") return true;
-  return fields.pluginId !== undefined
-    && (event === "invocation.started" || event === "invocation.completed");
+  return fields.pluginId !== undefined && (event === "invocation.started" || event === "invocation.completed");
 }
 
-export function formatLogLine(
-  level: LogLevel,
-  event: string,
-  fields: Record<string, Json>,
-  at: number,
-): string {
-  const owner = typeof fields.pluginId === "string" && fields.pluginId.length > 0
-    ? `${text(fields.pluginId)} `
-    : "";
+export function formatLogLine(level: LogLevel, event: string, fields: Record<string, Json>, at: number): string {
+  const owner = typeof fields.pluginId === "string" && fields.pluginId.length > 0 ? `${text(fields.pluginId)} ` : "";
   return `[${time(at)}] ${LEVEL_PREFIX[level]}${owner}${event}${details(fields)}`;
 }
 
@@ -165,4 +155,3 @@ export class TextLogger implements Logger {
     });
   }
 }
-

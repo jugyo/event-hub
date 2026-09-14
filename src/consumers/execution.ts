@@ -64,12 +64,19 @@ function publicErrorCode(error: unknown): string {
 
 export async function deliverConsumerEvent(options: DeliverConsumerEventOptions): Promise<Json> {
   const now = options.now ?? (() => new Date());
-  const logger = options.logger?.child({ pluginId: options.consumerId, invocationId: options.context.invocationId });
+  const logger = options.logger?.child({
+    pluginId: options.consumerId,
+    invocationId: options.context.invocationId,
+  });
   const attemptedAt = now();
   const delivery = options.store.beginDeliveryAttempt(options.consumerId, options.event.id, attemptedAt.toISOString());
   const retry = { ...DEFAULT_DELIVERY_RETRY, ...(options.retry ?? {}) };
   logger?.info("plugin.invocation_started", { kind: "event_consumer" });
-  logger?.debug("consumer.event_started", { eventId: options.event.id, eventType: options.event.type, attempt: delivery.attempt });
+  logger?.debug("consumer.event_started", {
+    eventId: options.event.id,
+    eventType: options.event.type,
+    attempt: delivery.attempt,
+  });
   try {
     const result = await runConsumerPlugin({
       ...options,
@@ -91,18 +98,29 @@ export async function deliverConsumerEvent(options: DeliverConsumerEventOptions)
     });
     options.store.completeDelivery(options.consumerId, options.event.id, now().toISOString());
     logger?.info("consumer.events_processed", { events: 1 });
-    logger?.info("plugin.invocation_completed", { kind: "event_consumer", events: 1 });
+    logger?.info("plugin.invocation_completed", {
+      kind: "event_consumer",
+      events: 1,
+    });
     return result;
   } catch (error) {
     const code = publicErrorCode(error);
-    if (error instanceof TerminalError || error instanceof PluginProcessError && error.terminal
-      || delivery.attempt >= retry.maxAttempts) {
+    if (
+      error instanceof TerminalError ||
+      (error instanceof PluginProcessError && error.terminal) ||
+      delivery.attempt >= retry.maxAttempts
+    ) {
       options.store.failDelivery(options.consumerId, options.event.id, now().toISOString(), code);
     } else {
       const nextAttemptAt = new Date(attemptedAt.getTime() + retryDelay(delivery.attempt, retry));
       options.store.retryDelivery(options.consumerId, options.event.id, nextAttemptAt.toISOString(), code);
     }
-    logger?.warn("consumer.event_failed", { eventId: options.event.id, eventType: options.event.type, attempt: delivery.attempt, code });
+    logger?.warn("consumer.event_failed", {
+      eventId: options.event.id,
+      eventType: options.event.type,
+      attempt: delivery.attempt,
+      code,
+    });
     logger?.error("plugin.invocation_failed", { kind: "event_consumer", code });
     throw error;
   }

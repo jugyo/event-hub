@@ -10,8 +10,8 @@
 ## Development setup
 
 ```console
-npm install
-npm test
+npm ci
+npm run ci
 ```
 
 ## Quick start
@@ -110,7 +110,20 @@ Logs are written to `.event-hub/launch-agent.log` and `.event-hub/launch-agent.e
 
 ## Development
 
+Run the same checks as GitHub Actions with:
+
 ```console
+npm ci
+npm run ci
+```
+
+The combined check runs formatting, linting, type checking, tests, package validation, and the build. To fix formatting locally, run `npm run format`.
+
+Individual checks are also available:
+
+```console
+npm run format:check
+npm run lint
 npm run typecheck
 npm test
 npm run test:pack

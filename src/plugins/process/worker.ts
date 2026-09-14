@@ -1,27 +1,50 @@
 import type { Json } from "@jugyo/duex";
 import type { HistoryPage } from "../../storage/event-store.ts";
-import type { HostToPluginMessage, PluginErrorCode, PluginModule, PluginStepContext, PluginToHostMessage } from "./contract.ts";
+import type {
+  HostToPluginMessage,
+  PluginErrorCode,
+  PluginModule,
+  PluginStepContext,
+  PluginToHostMessage,
+} from "./contract.ts";
 
 let nextRequestId = 0;
-const pending = new Map<number,
-  | { type: "step"; operation: () => Promise<Json> | Json; resolve: (value: Json) => void }
+const pending = new Map<
+  number,
+  | {
+      type: "step";
+      operation: () => Promise<Json> | Json;
+      resolve: (value: Json) => void;
+    }
   | { type: "history"; resolve: (value: HistoryPage) => void }
 >();
 
-class PluginProtocolError extends Error { readonly terminal = true; }
+class PluginProtocolError extends Error {
+  readonly terminal = true;
+}
 
 function publicErrorCode(error: unknown, fallback: PluginErrorCode): PluginErrorCode {
   return error instanceof PluginProtocolError ? "PLUGIN_PROTOCOL_VIOLATION" : fallback;
 }
 
-function send(message: PluginToHostMessage): void { process.send?.(message); }
+function send(message: PluginToHostMessage): void {
+  process.send?.(message);
+}
 
 const context: PluginStepContext = {
-  run<T extends Json>(name: string, operation: () => Promise<T> | T, options?: Parameters<PluginStepContext["run"]>[2]): Promise<T> {
+  run<T extends Json>(
+    name: string,
+    operation: () => Promise<T> | T,
+    options?: Parameters<PluginStepContext["run"]>[2],
+  ): Promise<T> {
     if (pending.size > 0) throw new PluginProtocolError("nested or concurrent durable plugin steps are not allowed");
     const requestId = nextRequestId++;
     return new Promise<T>((resolve) => {
-      pending.set(requestId, { type: "step", operation: operation as () => Promise<Json> | Json, resolve: resolve as (value: Json) => void });
+      pending.set(requestId, {
+        type: "step",
+        operation: operation as () => Promise<Json> | Json,
+        resolve: resolve as (value: Json) => void,
+      });
       send({ type: "step.request", requestId, name, retry: options?.retry });
     });
   },
@@ -39,12 +62,22 @@ process.on("message", async (raw: HostToPluginMessage) => {
   try {
     if (raw?.type === "start") {
       let plugin: PluginModule;
-      try { plugin = await import(raw.entry) as PluginModule; } catch {
-        send({ type: "plugin.failed", errorCode: "PLUGIN_IMPORT_FAILED", terminal: true });
+      try {
+        plugin = (await import(raw.entry)) as PluginModule;
+      } catch {
+        send({
+          type: "plugin.failed",
+          errorCode: "PLUGIN_IMPORT_FAILED",
+          terminal: true,
+        });
         return;
       }
       if (typeof plugin.execute !== "function") {
-        send({ type: "plugin.failed", errorCode: "PLUGIN_IMPORT_FAILED", terminal: true });
+        send({
+          type: "plugin.failed",
+          errorCode: "PLUGIN_IMPORT_FAILED",
+          terminal: true,
+        });
         return;
       }
       const result = await plugin.execute(context, raw.input);
@@ -58,7 +91,11 @@ process.on("message", async (raw: HostToPluginMessage) => {
     if (raw.type === "step.execute") {
       if (request.type !== "step") throw new PluginProtocolError("unexpected step response");
       try {
-        send({ type: "step.executed", requestId: raw.requestId, result: await request.operation() });
+        send({
+          type: "step.executed",
+          requestId: raw.requestId,
+          result: await request.operation(),
+        });
       } catch (error) {
         send({
           type: "step.executed",

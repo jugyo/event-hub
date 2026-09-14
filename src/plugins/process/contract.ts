@@ -11,10 +11,7 @@ export interface PluginModule {
 }
 
 export type PluginErrorCode =
-  | "PLUGIN_STEP_FAILED"
-  | "PLUGIN_PROTOCOL_VIOLATION"
-  | "PLUGIN_IMPORT_FAILED"
-  | "PLUGIN_EXECUTION_FAILED";
+  "PLUGIN_STEP_FAILED" | "PLUGIN_PROTOCOL_VIOLATION" | "PLUGIN_IMPORT_FAILED" | "PLUGIN_EXECUTION_FAILED";
 
 export type HostToPluginMessage =
   | { type: "start"; entry: string; input: Json }
@@ -23,8 +20,19 @@ export type HostToPluginMessage =
   | { type: "history.result"; requestId: number; page: HistoryPage };
 
 export type PluginToHostMessage =
-  | { type: "step.request"; requestId: number; name: string; retry?: RetryPolicy }
+  | {
+      type: "step.request";
+      requestId: number;
+      name: string;
+      retry?: RetryPolicy;
+    }
   | { type: "history.request"; requestId: number; query: HistoryQuery }
-  | { type: "step.executed"; requestId: number; result?: Json; errorCode?: PluginErrorCode; terminal?: boolean }
+  | {
+      type: "step.executed";
+      requestId: number;
+      result?: Json;
+      errorCode?: PluginErrorCode;
+      terminal?: boolean;
+    }
   | { type: "plugin.completed"; result: Json }
   | { type: "plugin.failed"; errorCode: PluginErrorCode; terminal?: boolean };

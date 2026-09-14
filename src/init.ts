@@ -24,31 +24,37 @@ export class InitConflictError extends Error {
 }
 
 function configText(): string {
-  return `${JSON.stringify({
-    schemaVersion: 1,
-    paths: {
-      sources: "sources",
-      consumers: "consumers",
-      data: ".event-hub",
+  return `${JSON.stringify(
+    {
+      schemaVersion: 1,
+      paths: {
+        sources: "sources",
+        consumers: "consumers",
+        data: ".event-hub",
+      },
+      pluginManifest: "plugin.json",
+      sourceDefaults: { backfill: "24h" },
+      secrets: {},
     },
-    pluginManifest: "plugin.json",
-    sourceDefaults: { backfill: "24h" },
-    secrets: {},
-  }, null, 2)}\n`;
+    null,
+    2,
+  )}\n`;
 }
 
 async function existingTargets(projectRoot: string): Promise<string[]> {
   const targets = [CONFIG_FILENAME, ...directoryFiles.keys(), ".event-hub"];
-  const existing = await Promise.all(targets.map(async (target) => {
-    try {
-      await stat(resolve(projectRoot, target));
-      return target;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") return null;
-      throw error;
-    }
-  }));
+  const existing = await Promise.all(
+    targets.map(async (target) => {
+      try {
+        await stat(resolve(projectRoot, target));
+        return target;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") return null;
+        throw error;
+      }
+    }),
+  );
   return existing.filter((target): target is string => target !== null);
 }
 
@@ -58,7 +64,9 @@ export async function initProject(directory = "."): Promise<InitResult> {
   if (conflicts.length > 0) throw new InitConflictError(conflicts);
 
   await mkdir(projectRoot, { recursive: true });
-  await writeFile(resolve(projectRoot, CONFIG_FILENAME), configText(), { flag: "wx" });
+  await writeFile(resolve(projectRoot, CONFIG_FILENAME), configText(), {
+    flag: "wx",
+  });
 
   for (const [directoryName, readme] of directoryFiles) {
     const path = resolve(projectRoot, directoryName);

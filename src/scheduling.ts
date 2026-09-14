@@ -2,7 +2,11 @@ import { nextDailySlot, type Logger, type RuntimeApi, type ScheduleRecord } from
 import type { EventStore, PluginRegistration } from "./storage/event-store.ts";
 import type { PluginManifest } from "./plugins/manifest.ts";
 import {
-  createPluginWorkflows, DAILY_CONSUMER_WORKFLOW, EVENT_CONSUMER_WORKFLOW, SOURCE_POLL_WORKFLOW, type PluginWorkflowOptions,
+  createPluginWorkflows,
+  DAILY_CONSUMER_WORKFLOW,
+  EVENT_CONSUMER_WORKFLOW,
+  SOURCE_POLL_WORKFLOW,
+  type PluginWorkflowOptions,
 } from "./workflows.ts";
 
 export { DAILY_CONSUMER_WORKFLOW, EVENT_CONSUMER_WORKFLOW, SOURCE_POLL_WORKFLOW } from "./workflows.ts";
@@ -46,7 +50,10 @@ export async function enqueueConsumerDeliveries(options: EnqueueConsumerDeliveri
         else if (result.invocation.status === "failed") options.runtime.retryInvocation(result.invocation.id);
       }
     } catch (error) {
-      options.logger?.warn("consumer.enqueue_failed", { pluginId: plugin.id, error: error instanceof Error ? error.name : "Error" });
+      options.logger?.warn("consumer.enqueue_failed", {
+        pluginId: plugin.id,
+        error: error instanceof Error ? error.name : "Error",
+      });
     }
   }
   return created;
@@ -79,7 +86,11 @@ export function syncPluginSchedules(options: SyncPluginSchedulesOptions): SyncPl
   const consumerWorkflow = options.dailyConsumerWorkflow ?? DAILY_CONSUMER_WORKFLOW;
   const managedPrefixes = ["plugin:source:", "plugin:consumer:"];
   const expected = new Set<string>();
-  const result: SyncPluginSchedulesResult = { created: [], updated: [], disabled: [] };
+  const result: SyncPluginSchedulesResult = {
+    created: [],
+    updated: [],
+    disabled: [],
+  };
   const now = options.runtime.health().now;
   for (const workflow of createPluginWorkflows(options)) {
     if (!options.runtime.registry.has(workflow.name)) options.runtime.registry.register(workflow);
@@ -96,14 +107,33 @@ export function syncPluginSchedules(options: SyncPluginSchedulesOptions): SyncPl
     if (manifest.kind === "source") {
       const everyMs = manifest.trigger.everyMs;
       if (!existing) {
-        options.runtime.createSchedule({ id, workflow: sourceWorkflow, input, every: everyMs, catchUp: "latest" });
+        options.runtime.createSchedule({
+          id,
+          workflow: sourceWorkflow,
+          input,
+          every: everyMs,
+          catchUp: "latest",
+        });
         result.created.push(id);
-      } else if (existing.scheduleType !== "interval" || existing.everyMs !== everyMs
-        || existing.workflowName !== sourceWorkflow || !sameInput(existing, plugin.id) || !existing.enabled) {
+      } else if (
+        existing.scheduleType !== "interval" ||
+        existing.everyMs !== everyMs ||
+        existing.workflowName !== sourceWorkflow ||
+        !sameInput(existing, plugin.id) ||
+        !existing.enabled
+      ) {
         options.runtime.store.updateSchedule(id, {
-          workflowName: sourceWorkflow, input, everyMs, scheduleType: "interval", dailyAt: null, timezone: null,
-          nextRunAt: existing.everyMs === everyMs && existing.scheduleType === "interval" ? existing.nextRunAt : now + everyMs,
-          catchUp: "latest", enabled: true, updatedAt: now,
+          workflowName: sourceWorkflow,
+          input,
+          everyMs,
+          scheduleType: "interval",
+          dailyAt: null,
+          timezone: null,
+          nextRunAt:
+            existing.everyMs === everyMs && existing.scheduleType === "interval" ? existing.nextRunAt : now + everyMs,
+          catchUp: "latest",
+          enabled: true,
+          updatedAt: now,
         });
         result.updated.push(id);
       }
@@ -113,15 +143,35 @@ export function syncPluginSchedules(options: SyncPluginSchedulesOptions): SyncPl
     if (manifest.trigger.type !== "daily") continue;
     const { at, timezone } = manifest.trigger;
     if (!existing) {
-      options.runtime.createDailySchedule({ id, workflow: consumerWorkflow, input, dailyAt: at, timezone, catchUp: "latest" });
+      options.runtime.createDailySchedule({
+        id,
+        workflow: consumerWorkflow,
+        input,
+        dailyAt: at,
+        timezone,
+        catchUp: "latest",
+      });
       result.created.push(id);
-    } else if (existing.scheduleType !== "daily" || existing.dailyAt !== at || existing.timezone !== timezone
-      || existing.workflowName !== consumerWorkflow || !sameInput(existing, plugin.id) || !existing.enabled) {
-      const sameCalendar = existing.scheduleType === "daily" && existing.dailyAt === at && existing.timezone === timezone;
+    } else if (
+      existing.scheduleType !== "daily" ||
+      existing.dailyAt !== at ||
+      existing.timezone !== timezone ||
+      existing.workflowName !== consumerWorkflow ||
+      !sameInput(existing, plugin.id) ||
+      !existing.enabled
+    ) {
+      const sameCalendar =
+        existing.scheduleType === "daily" && existing.dailyAt === at && existing.timezone === timezone;
       options.runtime.store.updateSchedule(id, {
-        workflowName: consumerWorkflow, input, scheduleType: "daily", dailyAt: at, timezone,
+        workflowName: consumerWorkflow,
+        input,
+        scheduleType: "daily",
+        dailyAt: at,
+        timezone,
         nextRunAt: sameCalendar ? existing.nextRunAt : nextDailySlot(now, at, timezone),
-        catchUp: "latest", enabled: true, updatedAt: now,
+        catchUp: "latest",
+        enabled: true,
+        updatedAt: now,
       });
       result.updated.push(id);
     }

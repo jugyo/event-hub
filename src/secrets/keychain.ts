@@ -6,7 +6,10 @@ import { join, resolve } from "node:path";
 
 import { SecretBackendError, type SecretBackend } from "./backend.ts";
 
-interface CommandResult { code: number | null; stdout: string }
+interface CommandResult {
+  code: number | null;
+  stdout: string;
+}
 type CommandRunner = (path: string, args: string[], input?: string) => Promise<CommandResult>;
 
 export interface KeychainSecretBackendOptions {
@@ -78,10 +81,15 @@ function serviceName(projectRoot: string): string {
 
 function runSecurity(path: string, args: string[], input?: string): Promise<CommandResult> {
   return new Promise((resolveCommand, reject) => {
-    const child = spawn(path, args, { env: {}, stdio: ["pipe", "pipe", "ignore"] });
+    const child = spawn(path, args, {
+      env: {},
+      stdio: ["pipe", "pipe", "ignore"],
+    });
     let stdout = "";
     child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
     child.once("error", reject);
     child.once("close", (code) => resolveCommand({ code, stdout }));
     child.stdin.end(input);
@@ -103,7 +111,14 @@ export class KeychainSecretBackend implements SecretBackend {
 
   async #read(name: string): Promise<CommandResult> {
     try {
-      return await this.#runCommand(this.#securityPath, ["find-generic-password", "-a", name, "-s", this.#service, "-w"]);
+      return await this.#runCommand(this.#securityPath, [
+        "find-generic-password",
+        "-a",
+        name,
+        "-s",
+        this.#service,
+        "-w",
+      ]);
     } catch {
       throw new SecretBackendError("UNAVAILABLE");
     }
@@ -136,9 +151,11 @@ export class KeychainSecretBackend implements SecretBackend {
     try {
       directory = await mkdtemp(join(tmpdir(), "event-hub-keychain-"));
       const helper = join(directory, "write-keychain");
-      const compiled = await this.#runCommand(this.#clangPath, [
-        "-framework", "Security", "-framework", "CoreFoundation", "-x", "c", "-o", helper, "-",
-      ], WRITE_HELPER_SOURCE);
+      const compiled = await this.#runCommand(
+        this.#clangPath,
+        ["-framework", "Security", "-framework", "CoreFoundation", "-x", "c", "-o", helper, "-"],
+        WRITE_HELPER_SOURCE,
+      );
       if (compiled.code !== 0) throw new Error("helper compile failed");
       const result = await this.#runCommand(helper, [this.#service, name, update ? "update" : "create"], value);
       if (result.code !== 0) throw new Error("helper write failed");

@@ -33,20 +33,20 @@ The shared platform owns event storage, delivery, scheduling, and retries so plu
 
 ## User experience
 
-| Task | Expected behavior |
-|---|---|
-| Start | Install with npm and initialize a directory to create configuration and templates. |
-| Add | Place a source or consumer folder and discover it on the next run. |
-| Remove | Delete the folder to stop new work without deleting stored state. |
-| Build | Use the shared API without importing another plugin implementation. |
-| Connect | Subscribe consumers to event types through a shared event contract. |
-| Review | Query stored events by time range and type. |
-| Aggregate | Run consumers on schedules such as every morning. |
-| Fail | Record load, configuration, and execution failures per plugin while others continue. |
-| Inspect | Show load state, last run, pending work, and failure details through the CLI. |
-| Operate | Run the same tick behavior manually or through launchd. |
-| Recover | Resume collection from the stored source position, subject to the backfill limit. |
-| Use secrets | Store only reference names in project configuration and resolve values at runtime. |
+| Task        | Expected behavior                                                                    |
+| ----------- | ------------------------------------------------------------------------------------ |
+| Start       | Install with npm and initialize a directory to create configuration and templates.   |
+| Add         | Place a source or consumer folder and discover it on the next run.                   |
+| Remove      | Delete the folder to stop new work without deleting stored state.                    |
+| Build       | Use the shared API without importing another plugin implementation.                  |
+| Connect     | Subscribe consumers to event types through a shared event contract.                  |
+| Review      | Query stored events by time range and type.                                          |
+| Aggregate   | Run consumers on schedules such as every morning.                                    |
+| Fail        | Record load, configuration, and execution failures per plugin while others continue. |
+| Inspect     | Show load state, last run, pending work, and failure details through the CLI.        |
+| Operate     | Run the same tick behavior manually or through launchd.                              |
+| Recover     | Resume collection from the stored source position, subject to the backfill limit.    |
+| Use secrets | Store only reference names in project configuration and resolve values at runtime.   |
 
 ## Historical queries and delivery
 

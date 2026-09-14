@@ -32,7 +32,13 @@ function consumerManifest(id: string, entry = "index.mjs") {
   };
 }
 
-async function writePlugin(root: string, kind: "sources" | "consumers", name: string, manifest: unknown, code = "export const value = 1;\n") {
+async function writePlugin(
+  root: string,
+  kind: "sources" | "consumers",
+  name: string,
+  manifest: unknown,
+  code = "export const value = 1;\n",
+) {
   const directory = join(root, kind, name);
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "plugin.json"), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -44,7 +50,9 @@ async function writePlugin(root: string, kind: "sources" | "consumers", name: st
 
 test("registers valid plugins while diagnosing invalid plugins", async () => {
   const root = await mkdtemp(join(tmpdir(), "event-hub discovery "));
-  const store = new EventStore({ path: join(root, ".event-hub", "state.sqlite") });
+  const store = new EventStore({
+    path: join(root, ".event-hub", "state.sqlite"),
+  });
   try {
     store.migrate();
     const validDirectory = await writePlugin(root, "sources", "valid", sourceManifest("source.valid"));
@@ -56,18 +64,27 @@ test("registers valid plugins while diagnosing invalid plugins", async () => {
     await mkdir(broken, { recursive: true });
     await writeFile(join(broken, "plugin.json"), "not json");
 
-    const result = await discoverAndSyncPlugins({ projectRoot: root, store, now: T1 });
+    const result = await discoverAndSyncPlugins({
+      projectRoot: root,
+      store,
+      now: T1,
+    });
 
-    assert.deepEqual(result.plugins.map(({ id }) => id), ["source.valid"]);
     assert.deepEqual(
-      result.diagnostics.map(({ code }) => code).sort(),
-      ["ENTRYPOINT_MISSING", "KIND_MISMATCH", "MANIFEST_INVALID"],
+      result.plugins.map(({ id }) => id),
+      ["source.valid"],
     );
+    assert.deepEqual(result.diagnostics.map(({ code }) => code).sort(), [
+      "ENTRYPOINT_MISSING",
+      "KIND_MISMATCH",
+      "MANIFEST_INVALID",
+    ]);
     assert.ok(result.diagnostics.every(({ path }) => path.startsWith(root)));
     assert.equal(result.diagnostics.find(({ id }) => id === "consumer.missing")?.code, "ENTRYPOINT_MISSING");
-    assert.deepEqual(store.listPluginRegistrations({ activeOnly: true }).map(({ id, directory }) => ({ id, directory })), [
-      { id: "source.valid", directory: validDirectory },
-    ]);
+    assert.deepEqual(
+      store.listPluginRegistrations({ activeOnly: true }).map(({ id, directory }) => ({ id, directory })),
+      [{ id: "source.valid", directory: validDirectory }],
+    );
   } finally {
     store.close();
     await rm(root, { recursive: true, force: true });
@@ -76,7 +93,9 @@ test("registers valid plugins while diagnosing invalid plugins", async () => {
 
 test("applies additions, updates, and removals on the next sync while preserving stable-ID state", async () => {
   const root = await mkdtemp(join(tmpdir(), "event-hub sync "));
-  const store = new EventStore({ path: join(root, ".event-hub", "state.sqlite") });
+  const store = new EventStore({
+    path: join(root, ".event-hub", "state.sqlite"),
+  });
   try {
     store.migrate();
     const sourceDirectory = await writePlugin(root, "sources", "source", sourceManifest("source.stable"));
@@ -91,12 +110,17 @@ test("applies additions, updates, and removals on the next sync while preserving
     });
     store.registerConsumer("consumer.stable", T1);
 
-    await writeFile(join(sourceDirectory, "plugin.json"), `${JSON.stringify(sourceManifest("source.stable", "index.mjs", 120_000))}\n`);
+    await writeFile(
+      join(sourceDirectory, "plugin.json"),
+      `${JSON.stringify(sourceManifest("source.stable", "index.mjs", 120_000))}\n`,
+    );
     await rm(consumerDirectory, { recursive: true });
     await writePlugin(root, "consumers", "added", consumerManifest("consumer.added"));
     await discoverAndSyncPlugins({ projectRoot: root, store, now: T2 });
 
-    assert.deepEqual(store.getSourceCheckpoint("source.stable")?.cursor, { page: 3 });
+    assert.deepEqual(store.getSourceCheckpoint("source.stable")?.cursor, {
+      page: 3,
+    });
     assert.doesNotThrow(() => store.matchConsumerEvents("consumer.stable", ["example.changed"], 10, T3));
     const registrations = store.listPluginRegistrations();
     assert.deepEqual(
@@ -145,7 +169,11 @@ export { documentation, pattern };
 `,
     );
 
-    const result = await discoverAndSyncPlugins({ projectRoot: root, store, now: T1 });
+    const result = await discoverAndSyncPlugins({
+      projectRoot: root,
+      store,
+      now: T1,
+    });
 
     assert.deepEqual(
       result.plugins.map(({ id }) => id),
@@ -170,7 +198,11 @@ test("diagnoses an invalid IANA time zone in a daily trigger", async () => {
     };
     await writePlugin(root, "consumers", "invalid-timezone", manifest);
 
-    const result = await discoverAndSyncPlugins({ projectRoot: root, store, now: T1 });
+    const result = await discoverAndSyncPlugins({
+      projectRoot: root,
+      store,
+      now: T1,
+    });
 
     assert.deepEqual(result.plugins, []);
     assert.equal(result.diagnostics[0]?.code, "MANIFEST_INVALID");

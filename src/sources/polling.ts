@@ -73,14 +73,23 @@ export async function pollSource(options: PollSourceOptions): Promise<PollSource
         message: `Source ${JSON.stringify(options.sourceId)} resumes at ${window.from} because the uncollected period exceeds the backfill limit`,
       }
     : null;
-  options.logger?.debug("source.window", { from: window.from, to: window.to, backfillLimited: diagnostic !== null });
+  options.logger?.debug("source.window", {
+    from: window.from,
+    to: window.to,
+    backfillLimited: diagnostic !== null,
+  });
 
   let cursor = checkpoint?.cursor ?? null;
   let pages = 0;
   let insertedEvents = 0;
   do {
     options.logger?.debug("source.page_started", { page: pages + 1 });
-    const page = await options.poll({ cursor, from: window.from, to: window.to, config: options.config });
+    const page = await options.poll({
+      cursor,
+      from: window.from,
+      to: window.to,
+      config: options.config,
+    });
     pages += 1;
     insertedEvents += options.store.appendSourceBatch({
       sourceId: options.sourceId,
@@ -91,10 +100,19 @@ export async function pollSource(options: PollSourceOptions): Promise<PollSource
       complete: !page.hasMore,
     }).length;
     cursor = page.nextCursor;
-    options.logger?.debug("source.page_completed", { page: pages, events: page.events.length, insertedEvents, hasMore: page.hasMore, cursorUpdated: page.nextCursor !== null });
+    options.logger?.debug("source.page_completed", {
+      page: pages,
+      events: page.events.length,
+      insertedEvents,
+      hasMore: page.hasMore,
+      cursorUpdated: page.nextCursor !== null,
+    });
     if (!page.hasMore) break;
   } while (true);
 
-  options.logger?.info("source.events_saved", { events: insertedEvents, pages });
+  options.logger?.info("source.events_saved", {
+    events: insertedEvents,
+    pages,
+  });
   return { window, pages, insertedEvents, diagnostic };
 }

@@ -30,8 +30,12 @@ async function readConfig(projectRoot: string): Promise<{ path: string; config: 
     throw new SecretConfigurationError(`${CONFIG_FILENAME} is invalid`);
   }
   const projectConfig = config as ProjectConfig;
-  if (projectConfig.secrets !== undefined
-    && (typeof projectConfig.secrets !== "object" || projectConfig.secrets === null || Array.isArray(projectConfig.secrets))) {
+  if (
+    projectConfig.secrets !== undefined &&
+    (typeof projectConfig.secrets !== "object" ||
+      projectConfig.secrets === null ||
+      Array.isArray(projectConfig.secrets))
+  ) {
     throw new SecretConfigurationError("The secrets catalog is invalid");
   }
   return { path, config: projectConfig };
@@ -39,14 +43,17 @@ async function readConfig(projectRoot: string): Promise<{ path: string; config: 
 
 async function saveConfig(path: string, config: ProjectConfig): Promise<void> {
   const temporary = resolve(dirname(path), `.${CONFIG_FILENAME}.${process.pid}.tmp`);
-  await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, {
+    mode: 0o600,
+  });
   await rename(temporary, path);
 }
 
 type ConfigWriter = (path: string, config: ProjectConfig) => Promise<void>;
 
 function validateName(name: string): void {
-  if (!NAME_PATTERN.test(name)) throw new SecretConfigurationError("Secret reference names must use environment variable syntax");
+  if (!NAME_PATTERN.test(name))
+    throw new SecretConfigurationError("Secret reference names must use environment variable syntax");
 }
 
 export class SecretService {
@@ -68,7 +75,8 @@ export class SecretService {
   async create(name: string, value: string): Promise<void> {
     validateName(name);
     const { path, config } = await readConfig(this.projectRoot);
-    if (Object.hasOwn(config.secrets ?? {}, name)) throw new SecretConfigurationError("The secret reference is already registered");
+    if (Object.hasOwn(config.secrets ?? {}, name))
+      throw new SecretConfigurationError("The secret reference is already registered");
     await this.backend.create(name, value);
     config.secrets = { ...config.secrets, [name]: { backend: "keychain" } };
     try {
@@ -82,28 +90,32 @@ export class SecretService {
   async update(name: string, value: string): Promise<void> {
     validateName(name);
     const { config } = await readConfig(this.projectRoot);
-    if (!Object.hasOwn(config.secrets ?? {}, name)) throw new SecretConfigurationError("The secret reference is not registered");
+    if (!Object.hasOwn(config.secrets ?? {}, name))
+      throw new SecretConfigurationError("The secret reference is not registered");
     await this.backend.update(name, value);
   }
 
   async get(name: string): Promise<string> {
     validateName(name);
     const { config } = await readConfig(this.projectRoot);
-    if (!Object.hasOwn(config.secrets ?? {}, name)) throw new SecretConfigurationError("The secret reference is not registered");
+    if (!Object.hasOwn(config.secrets ?? {}, name))
+      throw new SecretConfigurationError("The secret reference is not registered");
     return this.backend.get(name);
   }
 
   async delete(name: string): Promise<void> {
     validateName(name);
     const { path, config } = await readConfig(this.projectRoot);
-    if (!Object.hasOwn(config.secrets ?? {}, name)) throw new SecretConfigurationError("The secret reference is not registered");
+    if (!Object.hasOwn(config.secrets ?? {}, name))
+      throw new SecretConfigurationError("The secret reference is not registered");
     try {
       await this.backend.delete(name);
     } catch (error) {
       // If only the previous config save failed after backend deletion, retrying repairs the catalog.
       if (!(error instanceof SecretBackendError) || error.code !== "NOT_FOUND") throw error;
     }
-    const { [name]: _removed, ...remaining } = config.secrets ?? {};
+    const remaining = { ...config.secrets };
+    delete remaining[name];
     config.secrets = remaining;
     await this.#writeConfig(path, config);
   }

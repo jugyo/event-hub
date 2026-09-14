@@ -4,11 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import {
-  EventStore,
-  SourceCursorConflictError,
-  type EventInput,
-} from "../src/index.ts";
+import { EventStore, SourceCursorConflictError, type EventInput } from "../src/index.ts";
 
 const T0 = "2026-09-08T23:59:59.000Z";
 const T1 = "2026-09-09T00:00:00.000Z";
@@ -44,7 +40,9 @@ test("events and source cursors survive restart without storing duplicates", asy
 
     const reopened = new EventStore({ path });
     reopened.migrate();
-    assert.deepEqual(reopened.getSourceCheckpoint("source-a")?.cursor, { page: 1 });
+    assert.deepEqual(reopened.getSourceCheckpoint("source-a")?.cursor, {
+      page: 1,
+    });
     const inserted = reopened.appendSourceBatch({
       sourceId: "source-a",
       expectedCursor: { page: 1 },
@@ -78,13 +76,14 @@ test("a failed event write does not advance the cursor and the full range can be
   conflicting.externalId = "external-2";
 
   assert.throws(
-    () => store.appendSourceBatch({
-      sourceId: "source-a",
-      expectedCursor: null,
-      nextCursor: "next",
-      updatedAt: T3,
-      events: [event("same-id", T1), conflicting],
-    }),
+    () =>
+      store.appendSourceBatch({
+        sourceId: "source-a",
+        expectedCursor: null,
+        nextCursor: "next",
+        updatedAt: T3,
+        events: [event("same-id", T1), conflicting],
+      }),
     /UNIQUE constraint failed/,
   );
   assert.equal(store.getSourceCheckpoint("source-a"), null);
@@ -99,13 +98,14 @@ test("a failed event write does not advance the cursor and the full range can be
   });
   assert.equal(store.queryHistory({ from: T0, to: T3 }).events.length, 2);
   assert.throws(
-    () => store.appendSourceBatch({
-      sourceId: "source-a",
-      expectedCursor: null,
-      nextCursor: "stale-writer",
-      updatedAt: T3,
-      events: [],
-    }),
+    () =>
+      store.appendSourceBatch({
+        sourceId: "source-a",
+        expectedCursor: null,
+        nextCursor: "stale-writer",
+        updatedAt: T3,
+        events: [],
+      }),
     SourceCursorConflictError,
   );
   store.close();
@@ -130,13 +130,31 @@ test("history queries provide half-open windows, filters, and stable pagination"
   });
 
   const firstPage = store.queryHistory({ from: T1, to: T3, limit: 2 });
-  assert.deepEqual(firstPage.events.map(({ id }) => id), ["first", "second"]);
+  assert.deepEqual(
+    firstPage.events.map(({ id }) => id),
+    ["first", "second"],
+  );
   assert.ok(firstPage.nextCursor);
-  const secondPage = store.queryHistory({ from: T1, to: T3, limit: 2, after: firstPage.nextCursor! });
-  assert.deepEqual(secondPage.events.map(({ id }) => id), ["third"]);
+  const secondPage = store.queryHistory({
+    from: T1,
+    to: T3,
+    limit: 2,
+    after: firstPage.nextCursor!,
+  });
+  assert.deepEqual(
+    secondPage.events.map(({ id }) => id),
+    ["third"],
+  );
   assert.equal(secondPage.nextCursor, null);
   assert.deepEqual(
-    store.queryHistory({ from: T1, to: T3, eventTypes: ["example.changed"], sourceIds: ["source-a"] }).events.map(({ id }) => id),
+    store
+      .queryHistory({
+        from: T1,
+        to: T3,
+        eventTypes: ["example.changed"],
+        sourceIds: ["source-a"],
+      })
+      .events.map(({ id }) => id),
     ["first"],
   );
   store.close();
@@ -150,10 +168,7 @@ test("mixed second and millisecond precision preserves ordering and query bounda
     expectedCursor: null,
     nextCursor: null,
     updatedAt: "2026-09-09T01:00:00Z",
-    events: [
-      event("exact", "2026-09-09T00:00:00Z"),
-      event("later", "2026-09-09T00:00:00.500Z"),
-    ],
+    events: [event("exact", "2026-09-09T00:00:00Z"), event("later", "2026-09-09T00:00:00.500Z")],
   });
 
   const firstPage = store.queryHistory({
@@ -161,7 +176,10 @@ test("mixed second and millisecond precision preserves ordering and query bounda
     to: "2026-09-09T00:00:01Z",
     limit: 1,
   });
-  assert.deepEqual(firstPage.events.map(({ id }) => id), ["exact"]);
+  assert.deepEqual(
+    firstPage.events.map(({ id }) => id),
+    ["exact"],
+  );
   assert.equal(firstPage.events[0]?.occurredAt, "2026-09-09T00:00:00.000Z");
   assert.ok(firstPage.nextCursor);
   const secondPage = store.queryHistory({
@@ -169,7 +187,10 @@ test("mixed second and millisecond precision preserves ordering and query bounda
     to: "2026-09-09T00:00:01Z",
     after: firstPage.nextCursor!,
   });
-  assert.deepEqual(secondPage.events.map(({ id }) => id), ["later"]);
+  assert.deepEqual(
+    secondPage.events.map(({ id }) => id),
+    ["later"],
+  );
   assert.equal(secondPage.events[0]?.occurredAt, "2026-09-09T00:00:00.500Z");
   store.close();
 });
@@ -197,8 +218,14 @@ test("two consumers independently complete events received after registration", 
       events: [event("new-event", T2)],
     });
 
-    assert.deepEqual(store.matchConsumerEvents("consumer-a", ["example.changed"], 100, T3).map(({ event }) => event.id), ["new-event"]);
-    assert.deepEqual(store.matchConsumerEvents("consumer-b", ["example.changed"], 100, T3).map(({ event }) => event.id), ["new-event"]);
+    assert.deepEqual(
+      store.matchConsumerEvents("consumer-a", ["example.changed"], 100, T3).map(({ event }) => event.id),
+      ["new-event"],
+    );
+    assert.deepEqual(
+      store.matchConsumerEvents("consumer-b", ["example.changed"], 100, T3).map(({ event }) => event.id),
+      ["new-event"],
+    );
     store.completeDelivery("consumer-a", "new-event", T3);
     assert.equal(store.listPendingDeliveries("consumer-a").length, 0);
     assert.equal(store.listPendingDeliveries("consumer-b").length, 1);

@@ -68,18 +68,27 @@ function isValidTimeZone(value: string): boolean {
 function validateTrigger(kind: PluginKind, value: unknown): boolean {
   if (!isObject(value) || typeof value.type !== "string") return false;
   if (kind === "source") {
-    return value.type === "poll"
-      && Number.isFinite(value.everyMs) && Number(value.everyMs) > 0
-      && (value.backfillMs === undefined || (Number.isFinite(value.backfillMs) && Number(value.backfillMs) > 0));
+    return (
+      value.type === "poll" &&
+      Number.isFinite(value.everyMs) &&
+      Number(value.everyMs) > 0 &&
+      (value.backfillMs === undefined || (Number.isFinite(value.backfillMs) && Number(value.backfillMs) > 0))
+    );
   }
   if (value.type === "events") {
-    return Array.isArray(value.eventTypes)
-      && value.eventTypes.length > 0
-      && value.eventTypes.every((eventType) => typeof eventType === "string" && eventType.length > 0);
+    return (
+      Array.isArray(value.eventTypes) &&
+      value.eventTypes.length > 0 &&
+      value.eventTypes.every((eventType) => typeof eventType === "string" && eventType.length > 0)
+    );
   }
-  return value.type === "daily"
-    && typeof value.at === "string" && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.at)
-    && typeof value.timezone === "string" && isValidTimeZone(value.timezone);
+  return (
+    value.type === "daily" &&
+    typeof value.at === "string" &&
+    /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.at) &&
+    typeof value.timezone === "string" &&
+    isValidTimeZone(value.timezone)
+  );
 }
 
 function parseManifest(value: unknown): PluginManifest {
@@ -98,8 +107,13 @@ function parseManifest(value: unknown): PluginManifest {
     throw new TypeError("entry cannot reference a path outside the plugin");
   }
   if (!isJson(value.config)) throw new TypeError("config must be a JSON value");
-  if (!isObject(value.env) || !Object.entries(value.env).every(([target, source]) =>
-    ENV_NAME_PATTERN.test(target) && typeof source === "string" && ENV_NAME_PATTERN.test(source))) {
+  if (
+    !isObject(value.env) ||
+    !Object.entries(value.env).every(
+      ([target, source]) =>
+        ENV_NAME_PATTERN.test(target) && typeof source === "string" && ENV_NAME_PATTERN.test(source),
+    )
+  ) {
     throw new TypeError("env must map plugin environment variable names to host secret references");
   }
   if (!validateTrigger(value.kind, value.trigger)) {
@@ -124,18 +138,24 @@ async function pluginDirectories(root: string, expectedKind: PluginKind): Promis
   }
 }
 
-async function loadCandidate(candidate: Candidate, manifestFilename: string, diagnostics: PluginDiagnostic[]): Promise<void> {
+async function loadCandidate(
+  candidate: Candidate,
+  manifestFilename: string,
+  diagnostics: PluginDiagnostic[],
+): Promise<void> {
   const manifestPath = resolve(candidate.directory, manifestFilename);
   let raw: unknown;
   try {
     raw = JSON.parse(await readFile(manifestPath, "utf8"));
   } catch (error) {
     const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
-    diagnostics.push(diagnostic(
-      missing ? "MANIFEST_MISSING" : "MANIFEST_INVALID",
-      manifestPath,
-      missing ? "Manifest not found" : "Could not parse the manifest as JSON",
-    ));
+    diagnostics.push(
+      diagnostic(
+        missing ? "MANIFEST_MISSING" : "MANIFEST_INVALID",
+        manifestPath,
+        missing ? "Manifest not found" : "Could not parse the manifest as JSON",
+      ),
+    );
     return;
   }
   try {
@@ -146,12 +166,14 @@ async function loadCandidate(candidate: Candidate, manifestFilename: string, dia
     return;
   }
   if (candidate.manifest.kind !== candidate.expectedKind) {
-    diagnostics.push(diagnostic(
-      "KIND_MISMATCH",
-      manifestPath,
-      `A ${candidate.manifest.kind} manifest cannot be placed in a ${candidate.expectedKind} directory`,
-      candidate.manifest.id,
-    ));
+    diagnostics.push(
+      diagnostic(
+        "KIND_MISMATCH",
+        manifestPath,
+        `A ${candidate.manifest.kind} manifest cannot be placed in a ${candidate.expectedKind} directory`,
+        candidate.manifest.id,
+      ),
+    );
     candidate.manifest = undefined;
     return;
   }
@@ -162,15 +184,17 @@ async function loadCandidate(candidate: Candidate, manifestFilename: string, dia
       realpath(entrypoint),
       stat(entrypoint),
     ]);
-    if ((!entryPath.startsWith(`${directoryPath}${sep}`)) || !entryStat.isFile()) throw new Error("outside");
+    if (!entryPath.startsWith(`${directoryPath}${sep}`) || !entryStat.isFile()) throw new Error("outside");
     candidate.entrypoint = entryPath;
   } catch {
-    diagnostics.push(diagnostic(
-      "ENTRYPOINT_MISSING",
-      entrypoint,
-      "The entry point does not exist or points outside the plugin directory",
-      candidate.manifest.id,
-    ));
+    diagnostics.push(
+      diagnostic(
+        "ENTRYPOINT_MISSING",
+        entrypoint,
+        "The entry point does not exist or points outside the plugin directory",
+        candidate.manifest.id,
+      ),
+    );
     candidate.manifest = undefined;
   }
 }
@@ -180,7 +204,7 @@ async function codeFiles(directory: string): Promise<string[]> {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
     const path = resolve(directory, entry.name);
-    if (entry.isDirectory()) files.push(...await codeFiles(path));
+    if (entry.isDirectory()) files.push(...(await codeFiles(path)));
     else if (entry.isFile() && CODE_EXTENSION_PATTERN.test(entry.name)) files.push(path);
   }
   return files;
@@ -195,19 +219,26 @@ function moduleSpecifiers(file: string, source: string): string[] {
   const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, false);
   const specifiers: string[] = [];
   function visit(node: ts.Node): void {
-    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
-      && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteralLike(node.moduleSpecifier)
+    ) {
       specifiers.push(node.moduleSpecifier.text);
-    } else if (ts.isImportEqualsDeclaration(node)
-      && ts.isExternalModuleReference(node.moduleReference)
-      && node.moduleReference.expression
-      && ts.isStringLiteralLike(node.moduleReference.expression)) {
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      node.moduleReference.expression &&
+      ts.isStringLiteralLike(node.moduleReference.expression)
+    ) {
       specifiers.push(node.moduleReference.expression.text);
-    } else if (ts.isCallExpression(node)
-      && node.arguments.length >= 1
-      && ts.isStringLiteralLike(node.arguments[0])
-      && (node.expression.kind === ts.SyntaxKind.ImportKeyword
-        || (node.arguments.length === 1 && ts.isIdentifier(node.expression) && node.expression.text === "require"))) {
+    } else if (
+      ts.isCallExpression(node) &&
+      node.arguments.length >= 1 &&
+      ts.isStringLiteralLike(node.arguments[0]) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (node.arguments.length === 1 && ts.isIdentifier(node.expression) && node.expression.text === "require"))
+    ) {
       specifiers.push(node.arguments[0].text);
     }
     ts.forEachChild(node, visit);
@@ -222,7 +253,9 @@ async function crossPluginImport(candidate: Candidate, allDirectories: string[])
     for (const specifier of moduleSpecifiers(file, source)) {
       if (!specifier.startsWith(".") && !isAbsolute(specifier)) continue;
       const target = resolve(file, "..", specifier);
-      const other = allDirectories.find((directory) => directory !== candidate.directory && containsPath(directory, target));
+      const other = allDirectories.find(
+        (directory) => directory !== candidate.directory && containsPath(directory, target),
+      );
       if (other) return `${file}: ${specifier}`;
     }
   }
@@ -232,12 +265,13 @@ async function crossPluginImport(candidate: Candidate, allDirectories: string[])
 export async function discoverAndSyncPlugins(options: PluginDiscoveryOptions): Promise<PluginDiscoveryResult> {
   const projectRoot = resolve(options.projectRoot);
   const candidates = [
-    ...await pluginDirectories(resolve(projectRoot, options.sourcesPath ?? "sources"), "source"),
-    ...await pluginDirectories(resolve(projectRoot, options.consumersPath ?? "consumers"), "consumer"),
+    ...(await pluginDirectories(resolve(projectRoot, options.sourcesPath ?? "sources"), "source")),
+    ...(await pluginDirectories(resolve(projectRoot, options.consumersPath ?? "consumers"), "consumer")),
   ];
   const diagnostics: PluginDiagnostic[] = [];
-  await Promise.all(candidates.map((candidate) =>
-    loadCandidate(candidate, options.manifestFilename ?? "plugin.json", diagnostics)));
+  await Promise.all(
+    candidates.map((candidate) => loadCandidate(candidate, options.manifestFilename ?? "plugin.json", diagnostics)),
+  );
 
   const byId = new Map<string, Candidate[]>();
   for (const candidate of candidates) {
@@ -249,7 +283,9 @@ export async function discoverAndSyncPlugins(options: PluginDiscoveryOptions): P
   for (const [id, duplicates] of byId) {
     if (duplicates.length < 2) continue;
     for (const candidate of duplicates) {
-      diagnostics.push(diagnostic("DUPLICATE_ID", candidate.directory, `Duplicate plugin ID ${JSON.stringify(id)}`, id));
+      diagnostics.push(
+        diagnostic("DUPLICATE_ID", candidate.directory, `Duplicate plugin ID ${JSON.stringify(id)}`, id),
+      );
       candidate.manifest = undefined;
     }
   }
@@ -259,26 +295,31 @@ export async function discoverAndSyncPlugins(options: PluginDiscoveryOptions): P
     if (!candidate.manifest) continue;
     const imported = await crossPluginImport(candidate, directories);
     if (imported) {
-      diagnostics.push(diagnostic(
-        "CROSS_PLUGIN_IMPORT",
-        candidate.directory,
-        `A static import references another plugin implementation (${imported})`,
-        candidate.manifest.id,
-      ));
+      diagnostics.push(
+        diagnostic(
+          "CROSS_PLUGIN_IMPORT",
+          candidate.directory,
+          `A static import references another plugin implementation (${imported})`,
+          candidate.manifest.id,
+        ),
+      );
       candidate.manifest = undefined;
     }
   }
 
   const plugins = candidates.flatMap((candidate): PluginRegistrationInput[] =>
     candidate.manifest && candidate.entrypoint
-      ? [{
-          id: candidate.manifest.id,
-          kind: candidate.manifest.kind,
-          directory: candidate.directory,
-          entrypoint: candidate.entrypoint,
-          manifest: candidate.manifest as unknown as Json,
-        }]
-      : []);
+      ? [
+          {
+            id: candidate.manifest.id,
+            kind: candidate.manifest.kind,
+            directory: candidate.directory,
+            entrypoint: candidate.entrypoint,
+            manifest: candidate.manifest as unknown as Json,
+          },
+        ]
+      : [],
+  );
   plugins.sort((left, right) => left.id.localeCompare(right.id));
   diagnostics.sort((left, right) => left.path.localeCompare(right.path) || left.code.localeCompare(right.code));
   options.store.syncPluginRegistrations(plugins, options.now ?? new Date().toISOString());

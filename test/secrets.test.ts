@@ -34,7 +34,10 @@ test("Keychain add and update do not pass secret values through arguments or out
 
   const writes = calls.filter(({ path }) => path.endsWith("/write-keychain"));
   assert.equal(writes.length, 2);
-  assert.deepEqual(writes.map(({ input }) => input), [sentinel, sentinel]);
+  assert.deepEqual(
+    writes.map(({ input }) => input),
+    [sentinel, sentinel],
+  );
   for (const { args } of calls) assert.doesNotMatch(JSON.stringify(args), new RegExp(sentinel));
 });
 
@@ -49,10 +52,11 @@ test("Keychain helper failures produce a fixed error without secret values", asy
     },
   });
 
-  await assert.rejects(backend.create("WORK_TOKEN", sentinel),
-    (error: unknown) => error instanceof SecretBackendError
-      && error.code === "UNAVAILABLE"
-      && !String(error).includes(sentinel));
+  await assert.rejects(
+    backend.create("WORK_TOKEN", sentinel),
+    (error: unknown) =>
+      error instanceof SecretBackendError && error.code === "UNAVAILABLE" && !String(error).includes(sentinel),
+  );
 });
 
 class FakeSecretBackend implements SecretBackend {
@@ -133,8 +137,10 @@ test("retains the catalog and value when the backend is unavailable during delet
   await service.create("WORK_TOKEN", "temporary-value");
   backend.unavailable = true;
 
-  await assert.rejects(service.delete("WORK_TOKEN"),
-    (error: unknown) => error instanceof SecretBackendError && error.code === "UNAVAILABLE");
+  await assert.rejects(
+    service.delete("WORK_TOKEN"),
+    (error: unknown) => error instanceof SecretBackendError && error.code === "UNAVAILABLE",
+  );
   assert.deepEqual(await service.list(), ["WORK_TOKEN"]);
   assert.equal(backend.values.get("WORK_TOKEN"), "temporary-value");
 });
@@ -147,8 +153,10 @@ test("uses a fixed error for unavailable backends without blocking another backe
   healthy.values.set("TOKEN", "available");
   unavailable.unavailable = true;
 
-  await assert.rejects(new SecretService(root, unavailable).get("TOKEN"),
-    (error: unknown) => error instanceof SecretBackendError && error.code === "UNAVAILABLE");
+  await assert.rejects(
+    new SecretService(root, unavailable).get("TOKEN"),
+    (error: unknown) => error instanceof SecretBackendError && error.code === "UNAVAILABLE",
+  );
   assert.equal(await new SecretService(root, healthy).get("TOKEN"), "available");
 });
 
@@ -187,8 +195,9 @@ test("CLI does not expose secret values in output, configuration, manifests, or 
   for (const file of ["event-hub.json", "plugin.json", "job.plist"]) {
     assert.doesNotMatch(await readFile(join(root, file), "utf8"), new RegExp(sentinel));
   }
-  assert.deepEqual(JSON.parse(await readFile(join(root, "event-hub.json"), "utf8")).secrets,
-    { WORK_TOKEN: { backend: "keychain" } });
+  assert.deepEqual(JSON.parse(await readFile(join(root, "event-hub.json"), "utf8")).secrets, {
+    WORK_TOKEN: { backend: "keychain" },
+  });
 });
 
 test("CLI does not accept secret values in arguments", async (t) => {
@@ -199,7 +208,10 @@ test("CLI does not accept secret values in arguments", async (t) => {
   const result = await run(["secret", "add", "TOKEN", "argv-secret"], {
     projectRoot: root,
     backend,
-    readSecret: async () => { read = true; return "unused"; },
+    readSecret: async () => {
+      read = true;
+      return "unused";
+    },
     out: () => {},
     error: (message) => errors.push(message),
   });

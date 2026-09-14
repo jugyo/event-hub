@@ -2,10 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import {
-  EVENT_STORE_MIGRATIONS,
-  LATEST_EVENT_STORE_SCHEMA_VERSION,
-} from "./migrations.ts";
+import { EVENT_STORE_MIGRATIONS, LATEST_EVENT_STORE_SCHEMA_VERSION } from "./migrations.ts";
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
@@ -152,7 +149,9 @@ export class EventStore {
   migrate(): void {
     const current = this.schemaVersion();
     if (current > LATEST_EVENT_STORE_SCHEMA_VERSION) {
-      throw new Error(`event store schema version ${current} is newer than supported version ${LATEST_EVENT_STORE_SCHEMA_VERSION}`);
+      throw new Error(
+        `event store schema version ${current} is newer than supported version ${LATEST_EVENT_STORE_SCHEMA_VERSION}`,
+      );
     }
     for (const migration of EVENT_STORE_MIGRATIONS) {
       if (migration.version <= current) continue;
@@ -204,9 +203,7 @@ export class EventStore {
 
   listPluginRegistrations(options: { activeOnly?: boolean } = {}): PluginRegistration[] {
     const where = options.activeOnly ? " WHERE active = 1" : "";
-    const rows = this.#db.prepare(
-      `SELECT * FROM plugin_registrations${where} ORDER BY kind, plugin_id`,
-    ).all() as Row[];
+    const rows = this.#db.prepare(`SELECT * FROM plugin_registrations${where} ORDER BY kind, plugin_id`).all() as Row[];
     return rows.map((row) => ({
       id: String(row.plugin_id),
       kind: String(row.kind) as "source" | "consumer",
@@ -220,14 +217,20 @@ export class EventStore {
   }
 
   getSourceCheckpoint(sourceId: string): SourceCheckpoint | null {
-    const row = this.#db.prepare("SELECT * FROM source_checkpoints WHERE source_id = ?").get(sourceId) as Row | undefined;
+    const row = this.#db.prepare("SELECT * FROM source_checkpoints WHERE source_id = ?").get(sourceId) as
+      Row | undefined;
     return row
-      ? { sourceId, cursor: row.cursor_json === null ? null : parseJson(row.cursor_json), updatedAt: String(row.updated_at) }
+      ? {
+          sourceId,
+          cursor: row.cursor_json === null ? null : parseJson(row.cursor_json),
+          updatedAt: String(row.updated_at),
+        }
       : null;
   }
 
   getSourcePollWindow(sourceId: string): SourcePollWindow | null {
-    const row = this.#db.prepare("SELECT * FROM source_poll_windows WHERE source_id = ?").get(sourceId) as Row | undefined;
+    const row = this.#db.prepare("SELECT * FROM source_poll_windows WHERE source_id = ?").get(sourceId) as
+      Row | undefined;
     return row
       ? {
           sourceId,
@@ -252,10 +255,12 @@ export class EventStore {
     if (missedFrom !== null) missedFrom = normalizeTimestamp(missedFrom, "missedFrom");
     if (from > to) throw new RangeError("A source collection window must satisfy from <= to");
     return this.transaction(() => {
-      this.#db.prepare(
-        `INSERT INTO source_poll_windows (source_id, from_time, to_time, started_at, missed_from)
+      this.#db
+        .prepare(
+          `INSERT INTO source_poll_windows (source_id, from_time, to_time, started_at, missed_from)
          VALUES (?, ?, ?, ?, ?) ON CONFLICT(source_id) DO NOTHING`,
-      ).run(sourceId, from, to, startedAt, missedFrom);
+        )
+        .run(sourceId, from, to, startedAt, missedFrom);
       return this.getSourcePollWindow(sourceId)!;
     });
   }
@@ -300,10 +305,12 @@ export class EventStore {
           inserted.push(toEvent(row));
         }
       }
-      this.#db.prepare(
-        `INSERT INTO source_checkpoints (source_id, cursor_json, updated_at) VALUES (?, ?, ?)
+      this.#db
+        .prepare(
+          `INSERT INTO source_checkpoints (source_id, cursor_json, updated_at) VALUES (?, ?, ?)
          ON CONFLICT(source_id) DO UPDATE SET cursor_json = excluded.cursor_json, updated_at = excluded.updated_at`,
-      ).run(batch.sourceId, stringify(batch.nextCursor), updatedAt);
+        )
+        .run(batch.sourceId, stringify(batch.nextCursor), updatedAt);
       if (batch.complete) {
         this.#db.prepare("DELETE FROM source_poll_windows WHERE source_id = ?").run(batch.sourceId);
       }
@@ -329,46 +336,52 @@ export class EventStore {
       values.push(...query.sourceIds);
     }
     if (query.after) {
-      const decoded = JSON.parse(Buffer.from(query.after, "base64url").toString("utf8")) as { occurredAt: string; seq: number };
+      const decoded = JSON.parse(Buffer.from(query.after, "base64url").toString("utf8")) as {
+        occurredAt: string;
+        seq: number;
+      };
       const occurredAt = normalizeTimestamp(decoded.occurredAt, "after.occurredAt");
       if (!Number.isInteger(decoded.seq) || decoded.seq < 1) throw new TypeError("The after cursor is invalid");
       conditions.push("(occurred_at > ? OR (occurred_at = ? AND seq > ?))");
       values.push(occurredAt, occurredAt, decoded.seq);
     }
-    const rows = this.#db.prepare(
-      `SELECT * FROM events WHERE ${conditions.join(" AND ")} ORDER BY occurred_at, seq LIMIT ?`,
-    ).all(...values, limit + 1) as Row[];
+    const rows = this.#db
+      .prepare(`SELECT * FROM events WHERE ${conditions.join(" AND ")} ORDER BY occurred_at, seq LIMIT ?`)
+      .all(...values, limit + 1) as Row[];
     const hasMore = rows.length > limit;
     const events = rows.slice(0, limit).map(toEvent);
     const last = events.at(-1);
     return {
       events,
-      nextCursor: hasMore && last
-        ? Buffer.from(JSON.stringify({ occurredAt: last.occurredAt, seq: last.seq })).toString("base64url")
-        : null,
+      nextCursor:
+        hasMore && last
+          ? Buffer.from(JSON.stringify({ occurredAt: last.occurredAt, seq: last.seq })).toString("base64url")
+          : null,
     };
   }
 
   registerConsumer(consumerId: string, now: string): void {
     now = normalizeTimestamp(now, "now");
-    this.#db.prepare(
-      `INSERT INTO consumer_subscriptions (consumer_id, matched_through_seq, created_at, updated_at)
+    this.#db
+      .prepare(
+        `INSERT INTO consumer_subscriptions (consumer_id, matched_through_seq, created_at, updated_at)
        VALUES (?, (SELECT COALESCE(MAX(seq), 0) FROM events), ?, ?)
        ON CONFLICT(consumer_id) DO NOTHING`,
-    ).run(consumerId, now, now);
+      )
+      .run(consumerId, now, now);
   }
 
   matchConsumerEvents(consumerId: string, eventTypes: string[], limit: number, now: string): ConsumerDelivery[] {
     now = normalizeTimestamp(now, "now");
     if (!Number.isInteger(limit) || limit < 1) throw new RangeError("limit must be a positive integer");
     return this.transaction(() => {
-      const subscription = this.#db.prepare(
-        "SELECT matched_through_seq FROM consumer_subscriptions WHERE consumer_id = ?",
-      ).get(consumerId) as Row | undefined;
+      const subscription = this.#db
+        .prepare("SELECT matched_through_seq FROM consumer_subscriptions WHERE consumer_id = ?")
+        .get(consumerId) as Row | undefined;
       if (!subscription) throw new Error(`Consumer ${JSON.stringify(consumerId)} is not registered`);
-      const rows = this.#db.prepare(
-        "SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?",
-      ).all(Number(subscription.matched_through_seq), limit) as Row[];
+      const rows = this.#db
+        .prepare("SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?")
+        .all(Number(subscription.matched_through_seq), limit) as Row[];
       const accepted = new Set(eventTypes);
       const insert = this.#db.prepare(
         `INSERT INTO consumer_deliveries (consumer_id, event_id, status, created_at)
@@ -379,9 +392,9 @@ export class EventStore {
       }
       const last = rows.at(-1);
       if (last) {
-        this.#db.prepare(
-          "UPDATE consumer_subscriptions SET matched_through_seq = ?, updated_at = ? WHERE consumer_id = ?",
-        ).run(Number(last.seq), now, consumerId);
+        this.#db
+          .prepare("UPDATE consumer_subscriptions SET matched_through_seq = ?, updated_at = ? WHERE consumer_id = ?")
+          .run(Number(last.seq), now, consumerId);
       }
       return this.listReadyDeliveries(consumerId, now);
     });
@@ -390,36 +403,42 @@ export class EventStore {
   listReadyDeliveries(consumerId: string, now: string, limit = 100): ConsumerDelivery[] {
     now = normalizeTimestamp(now, "now");
     if (!Number.isInteger(limit) || limit < 1) throw new RangeError("limit must be a positive integer");
-    const rows = this.#db.prepare(
-      `SELECT d.consumer_id, d.status, d.created_at, d.completed_at, d.attempt,
+    const rows = this.#db
+      .prepare(
+        `SELECT d.consumer_id, d.status, d.created_at, d.completed_at, d.attempt,
               d.last_attempt_at, d.next_attempt_at, d.failed_at, d.error_code, e.*
        FROM consumer_deliveries d JOIN events e ON e.id = d.event_id
        WHERE d.consumer_id = ?
          AND (d.status = 'pending' OR (d.status = 'retry_wait' AND d.next_attempt_at <= ?))
        ORDER BY e.seq LIMIT ?`,
-    ).all(consumerId, now, limit) as Row[];
+      )
+      .all(consumerId, now, limit) as Row[];
     return rows.map((row) => this.deliveryFromRow(row));
   }
 
   listPendingDeliveries(consumerId: string): ConsumerDelivery[] {
-    const rows = this.#db.prepare(
-      `SELECT d.consumer_id, d.status, d.created_at, d.completed_at, d.attempt,
+    const rows = this.#db
+      .prepare(
+        `SELECT d.consumer_id, d.status, d.created_at, d.completed_at, d.attempt,
               d.last_attempt_at, d.next_attempt_at, d.failed_at, d.error_code, e.*
        FROM consumer_deliveries d JOIN events e ON e.id = d.event_id
        WHERE d.consumer_id = ? AND d.status IN ('pending', 'retry_wait') ORDER BY e.seq`,
-    ).all(consumerId) as Row[];
+      )
+      .all(consumerId) as Row[];
     return rows.map((row) => this.deliveryFromRow(row));
   }
 
   /** Returns the most recently attempted delivery that failed terminally or is waiting to retry. */
   getLatestFailedDelivery(consumerId: string): ConsumerDelivery | null {
-    const row = this.#db.prepare(
-      `SELECT d.consumer_id, d.status, d.created_at, d.completed_at, d.attempt,
+    const row = this.#db
+      .prepare(
+        `SELECT d.consumer_id, d.status, d.created_at, d.completed_at, d.attempt,
               d.last_attempt_at, d.next_attempt_at, d.failed_at, d.error_code, e.*
        FROM consumer_deliveries d JOIN events e ON e.id = d.event_id
        WHERE d.consumer_id = ? AND d.status IN ('failed', 'retry_wait')
        ORDER BY COALESCE(d.failed_at, d.last_attempt_at) DESC, e.seq DESC LIMIT 1`,
-    ).get(consumerId) as Row | undefined;
+      )
+      .get(consumerId) as Row | undefined;
     return row ? this.deliveryFromRow(row) : null;
   }
 
@@ -439,52 +458,62 @@ export class EventStore {
   }
 
   getDelivery(consumerId: string, eventId: string): ConsumerDelivery | null {
-    const row = this.#db.prepare(
-      `SELECT d.consumer_id, d.status, d.created_at, d.completed_at, d.attempt,
+    const row = this.#db
+      .prepare(
+        `SELECT d.consumer_id, d.status, d.created_at, d.completed_at, d.attempt,
               d.last_attempt_at, d.next_attempt_at, d.failed_at, d.error_code, e.*
        FROM consumer_deliveries d JOIN events e ON e.id = d.event_id
        WHERE d.consumer_id = ? AND d.event_id = ?`,
-    ).get(consumerId, eventId) as Row | undefined;
+      )
+      .get(consumerId, eventId) as Row | undefined;
     return row ? this.deliveryFromRow(row) : null;
   }
 
   beginDeliveryAttempt(consumerId: string, eventId: string, attemptedAt: string): ConsumerDelivery {
     attemptedAt = normalizeTimestamp(attemptedAt, "attemptedAt");
-    const result = this.#db.prepare(
-      `UPDATE consumer_deliveries
+    const result = this.#db
+      .prepare(
+        `UPDATE consumer_deliveries
        SET status = 'pending', attempt = attempt + 1, last_attempt_at = ?, next_attempt_at = NULL,
            failed_at = NULL, error_code = NULL
        WHERE consumer_id = ? AND event_id = ? AND status IN ('pending', 'retry_wait')
          AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`,
-    ).run(attemptedAt, consumerId, eventId, attemptedAt);
+      )
+      .run(attemptedAt, consumerId, eventId, attemptedAt);
     if (result.changes === 0) throw new Error("The delivery is not runnable");
     return this.getDelivery(consumerId, eventId)!;
   }
 
   retryDelivery(consumerId: string, eventId: string, nextAttemptAt: string, errorCode: string): void {
     nextAttemptAt = normalizeTimestamp(nextAttemptAt, "nextAttemptAt");
-    const result = this.#db.prepare(
-      `UPDATE consumer_deliveries SET status = 'retry_wait', next_attempt_at = ?, error_code = ?
+    const result = this.#db
+      .prepare(
+        `UPDATE consumer_deliveries SET status = 'retry_wait', next_attempt_at = ?, error_code = ?
        WHERE consumer_id = ? AND event_id = ? AND status = 'pending'`,
-    ).run(nextAttemptAt, errorCode, consumerId, eventId);
+      )
+      .run(nextAttemptAt, errorCode, consumerId, eventId);
     if (result.changes === 0) throw new Error("The delivery cannot be scheduled for retry");
   }
 
   failDelivery(consumerId: string, eventId: string, failedAt: string, errorCode: string): void {
     failedAt = normalizeTimestamp(failedAt, "failedAt");
-    const result = this.#db.prepare(
-      `UPDATE consumer_deliveries SET status = 'failed', failed_at = ?, next_attempt_at = NULL, error_code = ?
+    const result = this.#db
+      .prepare(
+        `UPDATE consumer_deliveries SET status = 'failed', failed_at = ?, next_attempt_at = NULL, error_code = ?
        WHERE consumer_id = ? AND event_id = ? AND status = 'pending'`,
-    ).run(failedAt, errorCode, consumerId, eventId);
+      )
+      .run(failedAt, errorCode, consumerId, eventId);
     if (result.changes === 0) throw new Error("The delivery cannot be marked as terminally failed");
   }
 
   completeDelivery(consumerId: string, eventId: string, completedAt: string): void {
     completedAt = normalizeTimestamp(completedAt, "completedAt");
-    const result = this.#db.prepare(
-      `UPDATE consumer_deliveries SET status = 'completed', completed_at = ?, next_attempt_at = NULL, error_code = NULL
+    const result = this.#db
+      .prepare(
+        `UPDATE consumer_deliveries SET status = 'completed', completed_at = ?, next_attempt_at = NULL, error_code = NULL
        WHERE consumer_id = ? AND event_id = ? AND status = 'pending'`,
-    ).run(completedAt, consumerId, eventId);
+      )
+      .run(completedAt, consumerId, eventId);
     if (result.changes === 0) throw new Error("The delivery does not exist");
   }
 
@@ -495,7 +524,11 @@ export class EventStore {
       this.#db.exec("COMMIT");
       return result;
     } catch (error) {
-      try { this.#db.exec("ROLLBACK"); } catch { /* SQLite may already have rolled back. */ }
+      try {
+        this.#db.exec("ROLLBACK");
+      } catch {
+        /* SQLite may already have rolled back. */
+      }
       throw error;
     }
   }

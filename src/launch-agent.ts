@@ -16,10 +16,18 @@ export interface LaunchAgentOptions {
   runCommand?: (path: string, args: string[]) => Promise<number>;
 }
 
-export interface LaunchAgentResult { label: string; plistPath: string }
+export interface LaunchAgentResult {
+  label: string;
+  plistPath: string;
+}
 
 function xml(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
 }
 
 export function launchAgentLabel(projectRoot: string): string {
@@ -27,7 +35,13 @@ export function launchAgentLabel(projectRoot: string): string {
   return `com.event-hub.${id}`;
 }
 
-export function launchAgentPlist(projectRoot: string, executable: string, intervalSeconds = 60, nodeExecutable = process.execPath, debug = false): string {
+export function launchAgentPlist(
+  projectRoot: string,
+  executable: string,
+  intervalSeconds = 60,
+  nodeExecutable = process.execPath,
+  debug = false,
+): string {
   projectRoot = resolve(projectRoot);
   executable = resolve(executable);
   nodeExecutable = resolve(nodeExecutable);
@@ -58,12 +72,23 @@ function defaultRun(path: string, args: string[]): Promise<number> {
   });
 }
 
-function settings(options: LaunchAgentOptions): Required<Pick<LaunchAgentOptions, "projectRoot" | "executable" | "nodeExecutable" | "home" | "launchctl" | "uid" | "intervalSeconds" | "runCommand">> {
+function settings(
+  options: LaunchAgentOptions,
+): Required<
+  Pick<
+    LaunchAgentOptions,
+    "projectRoot" | "executable" | "nodeExecutable" | "home" | "launchctl" | "uid" | "intervalSeconds" | "runCommand"
+  >
+> {
   return {
-    projectRoot: resolve(options.projectRoot), executable: resolve(options.executable),
-    nodeExecutable: resolve(options.nodeExecutable ?? process.execPath), home: resolve(options.home ?? homedir()),
-    launchctl: options.launchctl ?? "/bin/launchctl", uid: options.uid ?? process.getuid?.() ?? 0,
-    intervalSeconds: options.intervalSeconds ?? 60, runCommand: options.runCommand ?? defaultRun,
+    projectRoot: resolve(options.projectRoot),
+    executable: resolve(options.executable),
+    nodeExecutable: resolve(options.nodeExecutable ?? process.execPath),
+    home: resolve(options.home ?? homedir()),
+    launchctl: options.launchctl ?? "/bin/launchctl",
+    uid: options.uid ?? process.getuid?.() ?? 0,
+    intervalSeconds: options.intervalSeconds ?? 60,
+    runCommand: options.runCommand ?? defaultRun,
   };
 }
 
@@ -74,7 +99,11 @@ export async function registerLaunchAgent(options: LaunchAgentOptions): Promise<
   await mkdir(dirname(plistPath), { recursive: true });
   await mkdir(resolve(value.projectRoot, ".event-hub"), { recursive: true });
   const temporaryPath = `${plistPath}.tmp`;
-  await writeFile(temporaryPath, launchAgentPlist(value.projectRoot, value.executable, value.intervalSeconds, value.nodeExecutable, options.debug), { mode: 0o600 });
+  await writeFile(
+    temporaryPath,
+    launchAgentPlist(value.projectRoot, value.executable, value.intervalSeconds, value.nodeExecutable, options.debug),
+    { mode: 0o600 },
+  );
   await rename(temporaryPath, plistPath);
   const service = `gui/${value.uid}/${label}`;
   await value.runCommand(value.launchctl, ["bootout", service]);
@@ -91,7 +120,9 @@ export async function unregisterLaunchAgent(options: LaunchAgentOptions): Promis
   if (code !== 0 && code !== 113) {
     throw new Error(`launchctl bootout failed with exit code ${code}`);
   }
-  try { await unlink(plistPath); } catch (error) {
+  try {
+    await unlink(plistPath);
+  } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   return { label, plistPath };

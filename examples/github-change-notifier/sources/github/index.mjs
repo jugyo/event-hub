@@ -10,7 +10,8 @@ function config(value) {
   }
   return {
     repository: parsed.repository,
-    apiBaseUrl: typeof parsed.apiBaseUrl === "string" ? parsed.apiBaseUrl.replace(/\/$/u, "") : "https://api.github.com",
+    apiBaseUrl:
+      typeof parsed.apiBaseUrl === "string" ? parsed.apiBaseUrl.replace(/\/$/u, "") : "https://api.github.com",
     perPage: Number.isInteger(parsed.perPage) && parsed.perPage >= 1 && parsed.perPage <= 100 ? parsed.perPage : 100,
   };
 }
@@ -54,7 +55,10 @@ export async function execute(ctx, input) {
     url.searchParams.set("until", input.to);
     url.searchParams.set("per_page", String(settings.perPage));
     url.searchParams.set("page", String(page));
-    const headers = { Accept: "application/vnd.github+json", "User-Agent": "event-hub" };
+    const headers = {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "event-hub",
+    };
     if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
     const response = await fetch(url, { headers });
     if (!response.ok) throw new Error(`GitHub API returned ${response.status}`);

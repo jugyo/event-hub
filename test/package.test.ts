@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,7 +35,11 @@ test("installs the packed package and initializes a directory containing spaces"
 
     const duexImport = run(
       "node",
-      ["--input-type=module", "--eval", "import { defineWorkflow } from '@jugyo/duex'; if (typeof defineWorkflow !== 'function') process.exit(1)"],
+      [
+        "--input-type=module",
+        "--eval",
+        "import { defineWorkflow } from '@jugyo/duex'; if (typeof defineWorkflow !== 'function') process.exit(1)",
+      ],
       installRoot,
     );
     assert.equal(duexImport.status, 0, duexImport.stderr);
@@ -55,7 +59,6 @@ test("installs the packed package and initializes a directory containing spaces"
     // Resolve @jugyo/duex distribution files from the dependency package, not the application tarball.
     assert.doesNotMatch(packageFiles.stdout, /package\/dist\/src\/mini-restate\.js/);
     assert.doesNotMatch(packageFiles.stdout, /package\/dist\/mini-restate\//);
-
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
@@ -71,7 +74,9 @@ test("runs the primary operational scenario using only packed packages", async (
     assert.equal(install.status, 0, install.stderr);
 
     const runner = join(installRoot, "acceptance.mjs");
-    await writeFile(runner, `
+    await writeFile(
+      runner,
+      `
 import assert from "node:assert/strict";
 import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -205,11 +210,15 @@ for (const path of await persistedFiles(root)) {
   assert.equal(content.includes(Buffer.from(hidden)), false, \`secret persisted in \${path}\`);
 }
 console.log(JSON.stringify({ first: first.runs.map(run => run.outcome), resumed: resumed.runs.map(run => run.outcome), plugins: statuses.map(({ id, state }) => ({ id, state })) }));
-`);
+`,
+    );
 
     const acceptance = run("node", [runner, projectRoot], installRoot);
     assert.equal(acceptance.status, 0, `${acceptance.stdout}\n${acceptance.stderr}`);
-    const evidence = JSON.parse(acceptance.stdout) as { first: string[]; resumed: string[] };
+    const evidence = JSON.parse(acceptance.stdout) as {
+      first: string[];
+      resumed: string[];
+    };
     assert.ok(evidence.first.includes("retry_wait"));
     assert.ok(evidence.resumed.includes("completed"));
   } finally {
