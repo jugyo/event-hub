@@ -57,8 +57,10 @@ export type {
   SecretProvider,
 } from "./plugins/process/executor.ts";
 export type { PluginErrorCode, PluginModule, PluginStepContext } from "./plugins/process/contract.ts";
-export { DAILY_CONSUMER_WORKFLOW, SOURCE_POLL_WORKFLOW, syncPluginSchedules } from "./scheduling.ts";
-export type { SyncPluginSchedulesOptions, SyncPluginSchedulesResult } from "./scheduling.ts";
+export {
+  DAILY_CONSUMER_WORKFLOW, enqueueConsumerDeliveries, EVENT_CONSUMER_WORKFLOW, SOURCE_POLL_WORKFLOW, syncPluginSchedules,
+} from "./scheduling.ts";
+export type { EnqueueConsumerDeliveriesOptions, SyncPluginSchedulesOptions, SyncPluginSchedulesResult } from "./scheduling.ts";
 export { launchAgentLabel, launchAgentPlist, registerLaunchAgent, unregisterLaunchAgent } from "./launch-agent.ts";
 export type { LaunchAgentOptions, LaunchAgentResult } from "./launch-agent.ts";
 export { openProjectRuntime, projectStatus, tickProject, updateInvocation } from "./operations.ts";

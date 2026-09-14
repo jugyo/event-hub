@@ -3,10 +3,11 @@ import {
   SuspendInvocation,
   TerminalError,
   type Json,
+  type WorkflowContext,
   type WorkflowDefinition,
   type Logger,
 } from "@jugyo/duex";
-import { runConsumerPlugin } from "./consumers/execution.ts";
+import { deliverConsumerEvent, runConsumerPlugin } from "./consumers/execution.ts";
 import type { PluginManifest, SourcePluginManifest } from "./plugins/manifest.ts";
 import { runPluginProcess, type SecretProvider } from "./plugins/process/executor.ts";
 import { pollSource, type SourcePollPage } from "./sources/polling.ts";
@@ -14,6 +15,10 @@ import type { EventInput, EventStore, PluginRegistration } from "./storage/event
 
 export const SOURCE_POLL_WORKFLOW = "event-hub.source.poll";
 export const DAILY_CONSUMER_WORKFLOW = "event-hub.consumer.daily";
+export const EVENT_CONSUMER_WORKFLOW = "event-hub.consumer.event";
+
+// Delivery state owns event-consumer retries, so the runtime must not also retry plugin steps.
+const SINGLE_ATTEMPT = { maxAttempts: 1, initialDelayMs: 0 };
 
 export interface PluginWorkflowOptions {
   store: EventStore;
@@ -137,6 +142,49 @@ export function createPluginWorkflows(options: PluginWorkflowOptions): WorkflowD
           logger?.error("plugin.invocation_failed", { kind: "daily_consumer", code: error instanceof Error && "code" in error ? String(error.code) : "CONSUMER_EXECUTION_FAILED" });
           throw error;
         }
+      },
+    }),
+    defineWorkflow({
+      name: EVENT_CONSUMER_WORKFLOW,
+      version: "1",
+      // One invocation is one delivery attempt; a later attempt is a new invocation.
+      async run(context, input: unknown) {
+        const pluginId = inputPluginId(input);
+        const eventId = (input as { eventId?: unknown }).eventId;
+        if (typeof eventId !== "string") throw new TerminalError("event consumer invocation input is invalid");
+        const plugin = registration(options.store, pluginId, "consumer");
+        const manifest = plugin.manifest as unknown as PluginManifest;
+        if (manifest.kind !== "consumer" || manifest.trigger.type !== "events") {
+          throw new TerminalError(`consumer plugin ${JSON.stringify(pluginId)} is not event-triggered`);
+        }
+        const delivery = options.store.getDelivery(pluginId, eventId);
+        const now = new Date().toISOString();
+        if (!delivery || !(delivery.status === "pending"
+          || delivery.status === "retry_wait" && delivery.nextAttemptAt !== null && delivery.nextAttemptAt <= now)) {
+          return null;
+        }
+        const singleAttempt: WorkflowContext = {
+          invocationId: context.invocationId,
+          workflowName: context.workflowName,
+          scheduledAt: context.scheduledAt,
+          scheduledFrom: context.scheduledFrom,
+          run: (name, operation) => context.run(name, operation, { retry: SINGLE_ATTEMPT }),
+          sleep: (name, duration) => context.sleep(name, duration),
+          now: (name) => context.now(name),
+          uuid: (name) => context.uuid(name),
+        };
+        return deliverConsumerEvent({
+          context: singleAttempt,
+          store: options.store,
+          consumerId: pluginId,
+          event: delivery.event,
+          config: manifest.config,
+          entry: plugin.entrypoint,
+          env: manifest.env,
+          secrets: options.secrets,
+          timeoutMs: options.pluginTimeoutMs,
+          logger: options.logger,
+        });
       },
     }),
   ];

@@ -1,16 +1,218 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { initProject } from "../src/init.ts";
 import { openProjectRuntime, projectStatus, tickProject } from "../src/operations.ts";
 import { run } from "../src/cli.ts";
 import type { SecretBackend } from "../src/secrets/backend.ts";
-import type { InvocationRecord } from "@jugyo/duex";
+import { EventStore, type Json } from "../src/storage/event-store.ts";
+import { EVENT_CONSUMER_WORKFLOW } from "../src/workflows.ts";
+import type { InvocationRecord, TickResult } from "@jugyo/duex";
 
 const secrets = { get: () => undefined };
+
+async function eventConsumer(root: string, id: string, source: string): Promise<void> {
+  const directory = join(root, "consumers", id);
+  await mkdir(directory);
+  await writeFile(join(directory, "plugin.json"), `${JSON.stringify({
+    id, kind: "consumer", entry: "index.mjs", config: null, env: {},
+    trigger: { type: "events", eventTypes: ["example.changed"] },
+  })}\n`);
+  await writeFile(join(directory, "index.mjs"), source);
+}
+
+function recordingConsumer(log: string): string {
+  return `import { appendFile } from "node:fs/promises";
+export const execute = (ctx, input) => ctx.run("record", async () => {
+  await appendFile(${JSON.stringify(log)}, input.event.id + "\\n");
+  return { recorded: input.event.id };
+});\n`;
+}
+
+function withEventStore<T>(root: string, operation: (store: EventStore) => T): T {
+  const store = new EventStore({ path: join(root, ".event-hub", "events.sqlite") });
+  try {
+    store.migrate();
+    return operation(store);
+  } finally { store.close(); }
+}
+
+function appendEvents(root: string, ...events: { id: string; type?: string; payload?: Json }[]): void {
+  const now = new Date().toISOString();
+  withEventStore(root, (store) => store.appendSourceBatch({
+    sourceId: `source-${events[0].id}`, expectedCursor: null, nextCursor: null, updatedAt: now,
+    events: events.map(({ id, type = "example.changed", payload = null }) => ({
+      id, externalId: id, type, schemaVersion: 1, occurredAt: now, observedAt: now, payload,
+    })),
+  }));
+}
+
+function setRetryDeadline(root: string, consumerId: string, nextAttemptAt: string): void {
+  const db = new DatabaseSync(join(root, ".event-hub", "events.sqlite"));
+  try {
+    db.prepare("UPDATE consumer_deliveries SET next_attempt_at = ? WHERE consumer_id = ? AND status = 'retry_wait'")
+      .run(nextAttemptAt, consumerId);
+  } finally { db.close(); }
+}
+
+async function lines(path: string): Promise<string[]> {
+  try { return (await readFile(path, "utf8")).trim().split("\n").filter(Boolean); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+function outcomes(tick: TickResult): { workflow: string; outcome: string }[] {
+  return tick.runs.map(({ workflow, outcome }) => ({ workflow, outcome }));
+}
+
+test("tick delivers subscribed events to event consumers from registration onward", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub event consumer "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initProject(root);
+  const log = join(root, "delivered.log");
+  await eventConsumer(root, "notify", recordingConsumer(log));
+  appendEvents(root, { id: "before-registration" });
+
+  assert.deepEqual((await tickProject(root, secrets)).runs, []);
+  appendEvents(root, { id: "subscribed" }, { id: "other-type", type: "example.ignored" });
+  assert.deepEqual(outcomes(await tickProject(root, secrets)), [{ workflow: EVENT_CONSUMER_WORKFLOW, outcome: "completed" }]);
+  assert.deepEqual(await lines(log), ["subscribed"]);
+
+  appendEvents(root, { id: "later" });
+  await tickProject(root, secrets);
+  assert.deepEqual((await tickProject(root, secrets)).runs, []);
+  assert.deepEqual(await lines(log), ["subscribed", "later"]);
+  withEventStore(root, (store) => {
+    assert.equal(store.getDelivery("notify", "before-registration"), null);
+    assert.equal(store.getDelivery("notify", "other-type"), null);
+    assert.deepEqual([store.getDelivery("notify", "later")?.status, store.getDelivery("notify", "later")?.attempt], ["completed", 1]);
+  });
+  const [status] = await projectStatus(root, secrets);
+  assert.deepEqual({ id: status.id, state: status.state, pending: status.pending, failure: status.failure },
+    { id: "notify", state: "ready", pending: 0, failure: null });
+});
+
+test("tick retries temporary delivery failures after their deadline and fails terminal or exhausted deliveries", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub event retry "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initProject(root);
+  const log = join(root, "attempts.log");
+  const marker = join(root, "failed-once");
+  await eventConsumer(root, "flaky", `import { access, appendFile, writeFile } from "node:fs/promises";
+export const execute = (ctx, input) => ctx.run("deliver", async () => {
+  const { id, payload } = input.event;
+  await appendFile(${JSON.stringify(log)}, id + "\\n");
+  if (payload.mode === "once") {
+    try { await access(${JSON.stringify(marker)}); }
+    catch { await writeFile(${JSON.stringify(marker)}, "failed"); throw new Error("temporary"); }
+  }
+  if (payload.mode === "always") throw new Error("temporary");
+  if (payload.mode === "terminal") { const error = new Error("rejected"); error.terminal = true; throw error; }
+  return { delivered: id };
+});\n`);
+  await tickProject(root, secrets);
+  appendEvents(root,
+    { id: "terminal", payload: { mode: "terminal" } },
+    { id: "once", payload: { mode: "once" } },
+    { id: "always", payload: { mode: "always" } },
+    { id: "ok", payload: { mode: "ok" } });
+  const states = () => withEventStore(root, (store) => Object.fromEntries(["terminal", "once", "always", "ok"].map((id) => {
+    const delivery = store.getDelivery("flaky", id);
+    return [id, `${delivery?.status}:${delivery?.attempt}`];
+  })));
+
+  assert.deepEqual(outcomes(await tickProject(root, secrets)).map(({ outcome }) => outcome).sort(), ["completed", "failed", "failed", "failed"]);
+  assert.deepEqual(states(), { terminal: "failed:1", once: "retry_wait:1", always: "retry_wait:1", ok: "completed:1" });
+  assert.equal((await projectStatus(root, secrets))[0].pending, 2);
+
+  setRetryDeadline(root, "flaky", "2999-01-01T00:00:00.000Z");
+  assert.deepEqual((await tickProject(root, secrets)).runs, []);
+
+  setRetryDeadline(root, "flaky", "2000-01-01T00:00:00.000Z");
+  assert.deepEqual(outcomes(await tickProject(root, secrets)).map(({ outcome }) => outcome).sort(), ["completed", "failed"]);
+  assert.deepEqual(states(), { terminal: "failed:1", once: "completed:2", always: "retry_wait:2", ok: "completed:1" });
+
+  setRetryDeadline(root, "flaky", "2000-01-01T00:00:00.000Z");
+  assert.deepEqual(outcomes(await tickProject(root, secrets)).map(({ outcome }) => outcome), ["failed"]);
+  assert.deepEqual(states(), { terminal: "failed:1", once: "completed:2", always: "failed:3", ok: "completed:1" });
+  assert.deepEqual((await tickProject(root, secrets)).runs, []);
+  assert.deepEqual((await lines(log)).sort(), ["always", "always", "always", "ok", "once", "once", "terminal"]);
+
+  const [status] = await projectStatus(root, secrets);
+  assert.deepEqual({ state: status.state, pending: status.pending }, { state: "failed", pending: 0 });
+  assert.notEqual(status.failure, null);
+});
+
+test("status keeps a failed delivery visible after later deliveries succeed without blocking other consumers", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub event status "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initProject(root);
+  const failingLog = join(root, "failing.log");
+  const healthyLog = join(root, "healthy.log");
+  await eventConsumer(root, "failing", `import { appendFile } from "node:fs/promises";
+export const execute = (ctx, input) => ctx.run("deliver", async () => {
+  await appendFile(${JSON.stringify(failingLog)}, input.event.id + "\\n");
+  if (input.event.payload.mode === "terminal") { const error = new Error("rejected"); error.terminal = true; throw error; }
+  return { delivered: input.event.id };
+});\n`);
+  await eventConsumer(root, "healthy", recordingConsumer(healthyLog));
+  await tickProject(root, secrets);
+
+  appendEvents(root, { id: "boom", payload: { mode: "terminal" } });
+  await tickProject(root, secrets);
+  appendEvents(root, { id: "fine", payload: { mode: "ok" } });
+  await tickProject(root, secrets);
+
+  assert.deepEqual(await lines(failingLog), ["boom", "fine"]);
+  assert.deepEqual(await lines(healthyLog), ["boom", "fine"]);
+  const statuses = await projectStatus(root, secrets);
+  assert.deepEqual(statuses.map(({ id, state, pending, failure }) => ({ id, state, pending, failure })), [
+    { id: "failing", state: "failed", pending: 0, failure: "event boom failed: PLUGIN_STEP_FAILED" },
+    { id: "healthy", state: "ready", pending: 0, failure: null },
+  ]);
+});
+
+test("concurrent ticks execute a delivery attempt once", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub event concurrency "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initProject(root);
+  const log = join(root, "delivered.log");
+  await eventConsumer(root, "notify", recordingConsumer(log));
+  await tickProject(root, secrets);
+  appendEvents(root, { id: "shared" });
+
+  const ticks = await Promise.all([tickProject(root, secrets), tickProject(root, secrets), tickProject(root, secrets)]);
+  assert.equal(ticks.flatMap(({ runs }) => runs).filter(({ outcome }) => outcome === "completed").length, 1);
+  assert.deepEqual(await lines(log), ["shared"]);
+  withEventStore(root, (store) => assert.equal(store.getDelivery("notify", "shared")?.attempt, 1));
+});
+
+test("removing an event consumer stops new deliveries and retains delivery state", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub event removal "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initProject(root);
+  const log = join(root, "delivered.log");
+  await eventConsumer(root, "notify", recordingConsumer(log));
+  await tickProject(root, secrets);
+  appendEvents(root, { id: "kept" });
+  await tickProject(root, secrets);
+
+  await rm(join(root, "consumers", "notify"), { recursive: true });
+  appendEvents(root, { id: "after-removal" });
+  assert.deepEqual((await tickProject(root, secrets)).runs, []);
+  assert.deepEqual(await lines(log), ["kept"]);
+  withEventStore(root, (store) => {
+    assert.equal(store.getDelivery("notify", "kept")?.status, "completed");
+    assert.equal(store.getDelivery("notify", "after-removal"), null);
+  });
+  assert.deepEqual(await projectStatus(root, secrets), []);
+});
 
 test("ticks and reports valid plugins while diagnosing invalid plugins", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "event-hub operations "));

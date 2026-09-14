@@ -4,7 +4,8 @@ import { resolve } from "node:path";
 import { RuntimeApi, SqliteStore, WorkflowRegistry, silentLogger, type InvocationRecord, type Logger, type TickResult } from "@jugyo/duex";
 import { discoverAndSyncPlugins, type PluginDiagnostic } from "./plugins/discovery.ts";
 import type { SecretProvider } from "./plugins/process/executor.ts";
-import { syncPluginSchedules } from "./scheduling.ts";
+import type { PluginManifest } from "./plugins/manifest.ts";
+import { enqueueConsumerDeliveries, syncPluginSchedules } from "./scheduling.ts";
 import { EventStore, type PluginRegistration } from "./storage/event-store.ts";
 import { CONFIG_FILENAME } from "./init.ts";
 
@@ -105,8 +106,10 @@ export async function openProjectRuntime(projectRoot: string, secrets: SecretPro
 
 export async function tickProject(projectRoot: string, secrets: SecretProvider, maxRuns?: number, logger: Logger = silentLogger): Promise<TickResult> {
   const project = await openProjectRuntime(projectRoot, secrets, logger);
-  try { return await project.runtime.tick({ maxRuns }); }
-  finally { project.close(); }
+  try {
+    await enqueueConsumerDeliveries({ runtime: project.runtime, store: project.eventStore, plugins: project.plugins, logger });
+    return await project.runtime.tick({ maxRuns });
+  } finally { project.close(); }
 }
 
 export async function projectStatus(projectRoot: string, secrets: SecretProvider): Promise<PluginStatus[]> {
@@ -117,14 +120,23 @@ export async function projectStatus(projectRoot: string, secrets: SecretProvider
       const own = invocations.filter((invocation) => pluginId(invocation) === plugin.id);
       const last = own.find((invocation) => ["completed", "failed", "retry_wait", "cancelled"].includes(invocation.status));
       const failed = last?.status === "failed" || last?.status === "retry_wait" ? last : undefined;
+      const manifest = plugin.manifest as unknown as PluginManifest;
+      // An event consumer runs one invocation per delivery attempt, so its backlog and failures live in
+      // delivery state; a later successful delivery must not hide an earlier failed one.
+      const events = manifest.kind === "consumer" && manifest.trigger.type === "events";
+      const failedDelivery = events ? project.eventStore.getLatestFailedDelivery(plugin.id) : null;
       return {
         id: plugin.id,
         kind: plugin.kind,
-        state: failed ? "failed" : "ready",
+        state: (events ? failedDelivery : failed) ? "failed" : "ready",
         lastRunAt: last ? new Date(last.updatedAt).toISOString() : null,
         lastInvocationId: last?.id ?? null,
-        pending: own.filter(({ status }) => ["pending", "running", "sleeping", "retry_wait"].includes(status)).length,
-        failure: failed?.error?.message ?? null,
+        pending: events
+          ? project.eventStore.listPendingDeliveries(plugin.id).length
+          : own.filter(({ status }) => ["pending", "running", "sleeping", "retry_wait"].includes(status)).length,
+        failure: events
+          ? failedDelivery && `event ${failedDelivery.event.id} ${failedDelivery.status}: ${failedDelivery.errorCode}`
+          : failed?.error?.message ?? null,
       };
     });
     for (const diagnostic of project.diagnostics) {

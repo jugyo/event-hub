@@ -56,6 +56,12 @@ Delivery state is independent for each `(consumerId, eventId)`:
 
 Attempts and fixed error codes are persisted. Work in `retry_wait` before its deadline and work in `completed` or `failed` are excluded from normal ticks. One failure must not block another consumer or a later event. External effects are at-least-once, not exactly-once.
 
+A normal tick registers each active event consumer, matches events stored since its last match, and submits one `event-hub.consumer.event` invocation per runnable delivery. The invocation idempotency key is `consumerId:eventId:attempt`, and the key of an attempt already in flight keeps its number, so concurrent ticks submit an attempt once and the runner lease executes it once. Delivery state is the only retry authority for event consumers: an invocation makes exactly one attempt, its plugin steps are not retried by `@jugyo/duex` (retry metadata requested by the plugin is ignored), and a temporary failure moves the delivery to `retry_wait` so a later tick submits the next attempt as a new invocation. An invocation orphaned by a crashed runner resumes from the start and counts as another delivery attempt. Events stored during a tick are delivered by the next tick at the latest.
+
+Status reports an event consumer's pending work as its `pending` and `retry_wait` deliveries, and its failure as the most recent `failed` or `retry_wait` delivery, even when later deliveries succeed.
+
+A removed event consumer keeps its subscription position. When a consumer with the same stable ID returns, events of its subscribed types stored while it was removed are delivered.
+
 ## Event envelope and time
 
 An event contains `id`, `sourceId`, `type`, `externalId`, `schemaVersion`, `occurredAt`, `observedAt`, and JSON `payload`.
@@ -89,7 +95,7 @@ IPC uses finite JSON discriminated-union messages and one child process per exec
 
 Inputs, outputs, step results, and retry metadata must be finite JSON values. Schema violations, unknown or duplicate correlation IDs, and concurrent step requests are terminal protocol violations. Both host and child verify that no step is unfinished when the plugin returns.
 
-A process exit, IPC disconnect, or the default 30-second timeout during a step becomes a retryable `ctx.run` failure. `@jugyo/duex` persists `retry_wait`; the next tick starts a new child. Completed journal steps return their stored result without another `step.execute`.
+A process exit, IPC disconnect, or the default 30-second timeout during a step becomes a retryable `ctx.run` failure. `@jugyo/duex` persists `retry_wait`; the next tick starts a new child. Completed journal steps return their stored result without another `step.execute`. Event consumers are the exception: the failure ends the delivery attempt, and delivery state schedules the retry as described above.
 
 An exit outside a step, import failure, execution failure, or protocol violation fails only that invocation and must not retain the runner lease.
 

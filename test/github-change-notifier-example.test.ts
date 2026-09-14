@@ -7,12 +7,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 import {
-  deliverConsumerEvent,
   discoverAndSyncPlugins,
+  EVENT_CONSUMER_WORKFLOW,
   EventStore,
   pollSource,
   runConsumerPlugin,
   runPluginProcess,
+  tickProject,
 } from "../src/index.ts";
 import type { Json, WorkflowContext } from "@jugyo/duex";
 import type { SourcePollPage } from "../src/index.ts";
@@ -87,10 +88,11 @@ test("runs paginated GitHub collection, change notifications, and daily history 
   const discovery = await discoverAndSyncPlugins({ projectRoot: root, store, now: NOW.toISOString() });
   assert.deepEqual(discovery.diagnostics, []);
   assert.deepEqual(discovery.plugins.map(({ id }) => id), ["github.change-notification", "github.commits", "github.daily-summary"]);
-  store.registerConsumer("github.change-notification", NOW.toISOString());
+  const secrets = { get: (name: string) => name === "WORK_GITHUB_TOKEN" ? "fake-github-token" : "fake-gemini-key" };
+  // The first tick subscribes the event consumer before any event is stored.
+  assert.deepEqual((await tickProject(root, secrets)).runs, []);
   const source = discovery.plugins.find(({ id }) => id === "github.commits")!;
   const sourceManifest = source.manifest as { config: Json; env: Record<string, string> };
-  const secrets = { get: (name: string) => name === "WORK_GITHUB_TOKEN" ? "fake-github-token" : "fake-gemini-key" };
   const collected = await pollSource({
     sourceId: source.id, store, config: sourceManifest.config, now: () => NOW,
     poll: (input) => runPluginProcess({ context, entry: pathToFileURL(source.entrypoint).href, input: input as unknown as Json, env: sourceManifest.env, secrets }) as unknown as Promise<SourcePollPage>,
@@ -102,10 +104,12 @@ test("runs paginated GitHub collection, change notifications, and daily history 
   assert.deepEqual(history.map(({ occurredAt }) => occurredAt), ["2026-09-09T12:00:00.000Z", "2026-09-09T23:00:00.000Z"]);
   assert.equal((history[0].payload as { authoredAt: Json }).authoredAt, "2020-01-01T00:00:00.000Z");
 
-  const change = discovery.plugins.find(({ id }) => id === "github.change-notification")!;
-  const changeManifest = change.manifest as { config: Json; env: Record<string, string> };
-  const event = store.matchConsumerEvents(change.id, ["github.commit.created"], 10, NOW.toISOString())[0].event;
-  await deliverConsumerEvent({ context, store, consumerId: change.id, event, config: changeManifest.config, entry: pathToFileURL(change.entrypoint).href, env: changeManifest.env, secrets });
+  const delivered = await tickProject(root, secrets);
+  assert.deepEqual(delivered.runs.map(({ workflow, outcome }) => ({ workflow, outcome })), [
+    { workflow: EVENT_CONSUMER_WORKFLOW, outcome: "completed" },
+    { workflow: EVENT_CONSUMER_WORKFLOW, outcome: "completed" },
+  ]);
+  assert.deepEqual(history.map(({ id }) => store.getDelivery("github.change-notification", id)?.status), ["completed", "completed"]);
 
   const daily = discovery.plugins.find(({ id }) => id === "github.daily-summary")!;
   const dailyManifest = daily.manifest as { config: Json; env: Record<string, string> };
@@ -114,11 +118,12 @@ test("runs paginated GitHub collection, change notifications, and daily history 
     input: { scheduledAt: NOW.toISOString(), window: { from: "2026-09-09T00:00:00.000Z", to: NOW.toISOString() }, config: dailyManifest.config },
   });
   assert.deepEqual((dailyResult as { counts: Json }).counts, { day: 2, week: 2 });
-  assert.equal(geminiPrompts.length, 2);
+  assert.equal(geminiPrompts.length, 3);
   const sent = (await readFile(notifications, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(sent.map(({ title, message }) => ({ title, message })), [
     { title: "Changes in example/project", message: "Summary 1" },
-    { title: "GitHub daily summary", message: "Summary 2" },
+    { title: "Changes in example/project", message: "Summary 2" },
+    { title: "GitHub daily summary", message: "Summary 3" },
   ]);
 
   await rm(join(root, "consumers/change-notification"), { recursive: true });

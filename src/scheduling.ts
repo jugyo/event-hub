@@ -1,9 +1,56 @@
-import { nextDailySlot, type RuntimeApi, type ScheduleRecord } from "@jugyo/duex";
-import type { PluginRegistration } from "./storage/event-store.ts";
+import { nextDailySlot, type Logger, type RuntimeApi, type ScheduleRecord } from "@jugyo/duex";
+import type { EventStore, PluginRegistration } from "./storage/event-store.ts";
 import type { PluginManifest } from "./plugins/manifest.ts";
-import { createPluginWorkflows, DAILY_CONSUMER_WORKFLOW, SOURCE_POLL_WORKFLOW, type PluginWorkflowOptions } from "./workflows.ts";
+import {
+  createPluginWorkflows, DAILY_CONSUMER_WORKFLOW, EVENT_CONSUMER_WORKFLOW, SOURCE_POLL_WORKFLOW, type PluginWorkflowOptions,
+} from "./workflows.ts";
 
-export { DAILY_CONSUMER_WORKFLOW, SOURCE_POLL_WORKFLOW } from "./workflows.ts";
+export { DAILY_CONSUMER_WORKFLOW, EVENT_CONSUMER_WORKFLOW, SOURCE_POLL_WORKFLOW } from "./workflows.ts";
+
+export interface EnqueueConsumerDeliveriesOptions {
+  runtime: RuntimeApi;
+  store: EventStore;
+  plugins: PluginRegistration[];
+  now?: string;
+  logger?: Logger;
+}
+
+/**
+ * Subscribes active event consumers, matches newly stored events, and submits one invocation per
+ * runnable delivery attempt. Returns the number of invocations created.
+ */
+export async function enqueueConsumerDeliveries(options: EnqueueConsumerDeliveriesOptions): Promise<number> {
+  const now = options.now ?? new Date().toISOString();
+  let created = 0;
+  for (const plugin of options.plugins.filter(({ active }) => active)) {
+    const manifest = plugin.manifest as unknown as PluginManifest;
+    if (manifest.kind !== "consumer" || manifest.trigger.type !== "events") continue;
+    // One consumer's enqueue failure (for example, a concurrent tick retrying the same invocation first)
+    // must not stop other consumers or the tick itself.
+    try {
+      options.store.registerConsumer(plugin.id, now);
+      // ponytail: scans at most 1,000 new events and submits at most 100 ready deliveries per consumer per tick;
+      // later ticks handle the rest.
+      for (const delivery of options.store.matchConsumerEvents(plugin.id, manifest.trigger.eventTypes, 1_000, now)) {
+        // A pending delivery with attempts is already in flight (or was orphaned, and the runtime resumes that
+        // invocation), so its idempotency key keeps the current attempt number instead of getting another invocation.
+        const attempt = delivery.status === "retry_wait" ? delivery.attempt + 1 : Math.max(delivery.attempt, 1);
+        const result = await options.runtime.invoke({
+          workflow: EVENT_CONSUMER_WORKFLOW,
+          input: { pluginId: plugin.id, eventId: delivery.event.id },
+          idempotencyKey: `${plugin.id}:${delivery.event.id}:${attempt}`,
+        });
+        if (result.created) created += 1;
+        // The delivery is still runnable at this attempt, so the invocation failed before starting it
+        // (for example, while the consumer was removed) and can safely run again.
+        else if (result.invocation.status === "failed") options.runtime.retryInvocation(result.invocation.id);
+      }
+    } catch (error) {
+      options.logger?.warn("consumer.enqueue_failed", { pluginId: plugin.id, error: error instanceof Error ? error.name : "Error" });
+    }
+  }
+  return created;
+}
 
 export interface SyncPluginSchedulesOptions extends PluginWorkflowOptions {
   runtime: RuntimeApi;

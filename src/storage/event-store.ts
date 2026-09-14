@@ -411,6 +411,18 @@ export class EventStore {
     return rows.map((row) => this.deliveryFromRow(row));
   }
 
+  /** Returns the most recently attempted delivery that failed terminally or is waiting to retry. */
+  getLatestFailedDelivery(consumerId: string): ConsumerDelivery | null {
+    const row = this.#db.prepare(
+      `SELECT d.consumer_id, d.status, d.created_at, d.completed_at, d.attempt,
+              d.last_attempt_at, d.next_attempt_at, d.failed_at, d.error_code, e.*
+       FROM consumer_deliveries d JOIN events e ON e.id = d.event_id
+       WHERE d.consumer_id = ? AND d.status IN ('failed', 'retry_wait')
+       ORDER BY COALESCE(d.failed_at, d.last_attempt_at) DESC, e.seq DESC LIMIT 1`,
+    ).get(consumerId) as Row | undefined;
+    return row ? this.deliveryFromRow(row) : null;
+  }
+
   private deliveryFromRow(row: Row): ConsumerDelivery {
     return {
       consumerId: String(row.consumer_id),
