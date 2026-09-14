@@ -129,7 +129,7 @@ npm run test:keychain
 - Plugin code snapshots, automatic update compatibility, and historical event replay are not supported.
 - Source and consumer execution order is not guaranteed.
 - Stored events are retained indefinitely. The default 24-hour source backfill limit only controls collection from external systems.
-- The initial release supports polling sources and daily consumers, not webhooks or file watching.
+- Polling sources, event consumers, and daily consumers are supported; webhooks and file watching are not.
 
 ## License
 
