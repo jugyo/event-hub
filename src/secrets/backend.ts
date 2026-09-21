@@ -17,6 +17,7 @@ export class SecretBackendError extends Error {
 }
 
 export interface SecretBackend {
+  has?(name: string): Promise<boolean>;
   create(name: string, value: string): Promise<void>;
   update(name: string, value: string): Promise<void>;
   get(name: string): Promise<string>;

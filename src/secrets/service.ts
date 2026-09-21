@@ -51,6 +51,11 @@ async function saveConfig(path: string, config: ProjectConfig): Promise<void> {
 
 type ConfigWriter = (path: string, config: ProjectConfig) => Promise<void>;
 
+export interface SecretStatus {
+  name: string;
+  status: "available" | "missing";
+}
+
 function validateName(name: string): void {
   if (!NAME_PATTERN.test(name))
     throw new SecretConfigurationError("Secret reference names must use environment variable syntax");
@@ -70,6 +75,27 @@ export class SecretService {
   async list(): Promise<string[]> {
     const { config } = await readConfig(this.projectRoot);
     return Object.keys(config.secrets ?? {}).sort();
+  }
+
+  async listStatuses(): Promise<SecretStatus[]> {
+    const references = await this.list();
+    return Promise.all(
+      references.map(async (name) => ({
+        name,
+        status: (await this.#has(name)) ? "available" : "missing",
+      })),
+    );
+  }
+
+  async #has(name: string): Promise<boolean> {
+    if (this.backend.has) return this.backend.has(name);
+    try {
+      await this.backend.get(name);
+      return true;
+    } catch (error) {
+      if (error instanceof SecretBackendError && error.code === "NOT_FOUND") return false;
+      throw error;
+    }
   }
 
   async create(name: string, value: string): Promise<void> {
@@ -92,7 +118,12 @@ export class SecretService {
     const { config } = await readConfig(this.projectRoot);
     if (!Object.hasOwn(config.secrets ?? {}, name))
       throw new SecretConfigurationError("The secret reference is not registered");
-    await this.backend.update(name, value);
+    try {
+      await this.backend.update(name, value);
+    } catch (error) {
+      if (!(error instanceof SecretBackendError) || error.code !== "NOT_FOUND") throw error;
+      await this.backend.create(name, value);
+    }
   }
 
   async get(name: string): Promise<string> {

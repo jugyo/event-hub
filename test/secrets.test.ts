@@ -31,6 +31,7 @@ test("Keychain add and update do not pass secret values through arguments or out
 
   await backend.create("WORK_TOKEN", sentinel);
   await backend.update("WORK_TOKEN", sentinel);
+  assert.equal(await backend.has("WORK_TOKEN"), true);
 
   const writes = calls.filter(({ path }) => path.endsWith("/write-keychain"));
   assert.equal(writes.length, 2);
@@ -39,6 +40,7 @@ test("Keychain add and update do not pass secret values through arguments or out
     [sentinel, sentinel],
   );
   for (const { args } of calls) assert.doesNotMatch(JSON.stringify(args), new RegExp(sentinel));
+  assert.equal(calls.at(-1)?.args.includes("-w"), false);
 });
 
 test("Keychain helper failures produce a fixed error without secret values", async () => {
@@ -62,6 +64,11 @@ test("Keychain helper failures produce a fixed error without secret values", asy
 class FakeSecretBackend implements SecretBackend {
   readonly values = new Map<string, string>();
   unavailable = false;
+
+  async has(name: string): Promise<boolean> {
+    if (this.unavailable) throw new SecretBackendError("UNAVAILABLE");
+    return this.values.has(name);
+  }
 
   async create(name: string, value: string): Promise<void> {
     if (this.values.has(name)) throw new SecretBackendError("ALREADY_EXISTS");
@@ -97,6 +104,7 @@ test("creates, updates, lists, and deletes secrets with a fake backend", async (
 
   await service.create("WORK_TOKEN", "first");
   assert.deepEqual(await service.list(), ["WORK_TOKEN"]);
+  assert.deepEqual(await service.listStatuses(), [{ name: "WORK_TOKEN", status: "available" }]);
   assert.equal(await service.get("WORK_TOKEN"), "first");
 
   await service.update("WORK_TOKEN", "second");
@@ -105,6 +113,50 @@ test("creates, updates, lists, and deletes secrets with a fake backend", async (
   await service.delete("WORK_TOKEN");
   assert.deepEqual(await service.list(), []);
   await assert.rejects(service.get("WORK_TOKEN"), SecretConfigurationError);
+});
+
+test("lists missing secrets without exposing values and repairs them through update", async (t) => {
+  const root = await project(t);
+  const backend = new FakeSecretBackend();
+  const service = new SecretService(root, backend);
+  const sentinel = "replacement-secret-must-not-be-printed";
+  await service.create("WORK_TOKEN", "initial-value");
+  backend.values.delete("WORK_TOKEN");
+
+  assert.deepEqual(await service.listStatuses(), [{ name: "WORK_TOKEN", status: "missing" }]);
+
+  const output: string[] = [];
+  const errors: string[] = [];
+  assert.equal(
+    await run(["secret", "list"], {
+      projectRoot: root,
+      backend,
+      readSecret: async () => "unused",
+      out: (message) => output.push(message),
+      error: (message) => errors.push(message),
+    }),
+    0,
+  );
+  assert.deepEqual(output, ["WORK_TOKEN\tmissing"]);
+  assert.deepEqual(errors, []);
+
+  await service.update("WORK_TOKEN", sentinel);
+  assert.deepEqual(await service.listStatuses(), [{ name: "WORK_TOKEN", status: "available" }]);
+  assert.equal(await service.get("WORK_TOKEN"), sentinel);
+  assert.doesNotMatch(JSON.stringify(output), new RegExp(sentinel));
+});
+
+test("does not report an unavailable secret backend as missing", async (t) => {
+  const root = await project(t);
+  const backend = new FakeSecretBackend();
+  const service = new SecretService(root, backend);
+  await service.create("WORK_TOKEN", "hidden-value");
+  backend.unavailable = true;
+
+  await assert.rejects(
+    service.listStatuses(),
+    (error: unknown) => error instanceof SecretBackendError && error.code === "UNAVAILABLE",
+  );
 });
 
 test("retrying delete repairs the catalog after config persistence fails following backend deletion", async (t) => {

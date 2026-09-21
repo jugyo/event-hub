@@ -58,3 +58,4 @@ export type { SecretBackend, SecretBackendErrorCode } from "./secrets/backend.ts
 export { KeychainSecretBackend } from "./secrets/keychain.ts";
 export type { KeychainSecretBackendOptions } from "./secrets/keychain.ts";
 export { SecretConfigurationError, SecretService } from "./secrets/service.ts";
+export type { SecretStatus } from "./secrets/service.ts";

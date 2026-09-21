@@ -160,7 +160,7 @@ export async function run(argv = process.argv.slice(2), dependencies = defaultDe
     if (command !== "secret" || subject === undefined || extra.length > 0) return usage(dependencies.error);
     const service = secrets;
     if (subject === "list" && name === undefined) {
-      for (const reference of await service.list()) dependencies.out(reference);
+      for (const reference of await service.listStatuses()) dependencies.out(`${reference.name}\t${reference.status}`);
       return 0;
     }
     if (subject === "delete" && name !== undefined) {

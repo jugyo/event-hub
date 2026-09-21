@@ -139,6 +139,13 @@ export class KeychainSecretBackend implements SecretBackend {
     await this.#write(name, value, false);
   }
 
+  async has(name: string): Promise<boolean> {
+    const result = await this.#find(name);
+    if (result.code === 44) return false;
+    if (result.code !== 0) throw new SecretBackendError("UNAVAILABLE");
+    return true;
+  }
+
   async update(name: string, value: string): Promise<void> {
     const current = await this.#find(name);
     if (current.code === 44) throw new SecretBackendError("NOT_FOUND");
