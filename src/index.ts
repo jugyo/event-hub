@@ -28,9 +28,15 @@ export type {
   SourcePollPage,
 } from "./sources/polling.ts";
 
-export { discoverAndSyncPlugins } from "./plugins/discovery.ts";
+export { discoverAndSyncPlugins, discoverPlugins } from "./plugins/discovery.ts";
 export type { PluginDiagnostic, PluginDiscoveryOptions, PluginDiscoveryResult } from "./plugins/discovery.ts";
-export type { ConsumerPluginManifest, PluginKind, PluginManifest, SourcePluginManifest } from "./plugins/manifest.ts";
+export type {
+  ConsumerPluginManifest,
+  OAuth2PkceCredential,
+  PluginKind,
+  PluginManifest,
+  SourcePluginManifest,
+} from "./plugins/manifest.ts";
 export { PluginProcessError, resolvePluginEnvironment, runPluginProcess } from "./plugins/process/executor.ts";
 export type { PluginProcessErrorCode, RunPluginProcessOptions, SecretProvider } from "./plugins/process/executor.ts";
 export type { PluginErrorCode, PluginModule, PluginStepContext } from "./plugins/process/contract.ts";
@@ -58,4 +64,6 @@ export type { SecretBackend, SecretBackendErrorCode } from "./secrets/backend.ts
 export { KeychainSecretBackend } from "./secrets/keychain.ts";
 export type { KeychainSecretBackendOptions } from "./secrets/keychain.ts";
 export { SecretConfigurationError, SecretService } from "./secrets/service.ts";
+export { OAuthCredentialError, OAuthCredentialService, findOAuthCredential } from "./oauth.ts";
+export type { OAuthCredentialBundle, OAuthCredentialStatus } from "./oauth.ts";
 export type { SecretStatus } from "./secrets/service.ts";

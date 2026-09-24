@@ -97,6 +97,35 @@ event-hub secret delete WORK_GITHUB_TOKEN
 
 Values are read from a hidden terminal prompt or standard input, never from command-line arguments. See [ADR 0002](docs/adr-0002-secret-backend.md) for the security model.
 
+OAuth 2.0 Authorization Code Flow credentials can be declared by a plugin and managed separately from
+static secrets. The Client ID remains a normal secret reference, while only the current Access Token is
+injected into the plugin process:
+
+```json
+{
+  "credentials": {
+    "x-user": {
+      "type": "oauth2-pkce",
+      "authorizationEndpoint": "https://x.com/i/oauth2/authorize",
+      "tokenEndpoint": "https://api.x.com/2/oauth2/token",
+      "clientId": "X_CLIENT_ID",
+      "scopes": ["tweet.read", "users.read", "bookmark.read", "offline.access"],
+      "env": "X_ACCESS_TOKEN"
+    }
+  }
+}
+```
+
+```console
+event-hub auth login x-user
+event-hub auth status x-user
+event-hub auth logout x-user
+```
+
+Login uses PKCE and a temporary callback bound to `127.0.0.1`. Access and Refresh Tokens are stored as
+one macOS Keychain credential bundle. Scheduled plugin execution refreshes an expiring token without
+opening a browser; when reauthorization is required it fails with a fixed diagnostic instead.
+
 ## LaunchAgent
 
 Register or remove the current project for periodic execution:

@@ -2,6 +2,7 @@ import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Json, Logger, WorkflowContext } from "@jugyo/duex";
 import type { HistoryPage, HistoryQuery } from "../../storage/event-store.ts";
+import type { OAuth2PkceCredential } from "../manifest.ts";
 import type { HostToPluginMessage, PluginErrorCode, PluginToHostMessage } from "./contract.ts";
 
 export type PluginProcessErrorCode =
@@ -22,12 +23,14 @@ const workerPath = fileURLToPath(
 
 export interface SecretProvider {
   get(name: string): Promise<string | undefined> | string | undefined;
+  getOAuthAccessToken?(id: string, config: OAuth2PkceCredential): Promise<string> | string;
 }
 export interface RunPluginProcessOptions {
   context: WorkflowContext;
   entry: string;
   input: Json;
   env: Record<string, string>;
+  credentials?: Record<string, OAuth2PkceCredential>;
   secrets: SecretProvider;
   timeoutMs?: number;
   onSpawn?: (child: ChildProcess) => void;
@@ -146,18 +149,23 @@ function parsePluginMessage(raw: unknown): PluginToHostMessage | null {
 export async function resolvePluginEnvironment(
   mapping: Record<string, string>,
   secrets: SecretProvider,
+  credentials: Record<string, OAuth2PkceCredential> = {},
 ): Promise<NodeJS.ProcessEnv> {
   const environment: NodeJS.ProcessEnv = {};
   for (const [pluginName, managedName] of Object.entries(mapping)) {
     const value = await secrets.get(managedName);
     if (value !== undefined) environment[pluginName] = value;
   }
+  for (const [id, credential] of Object.entries(credentials)) {
+    if (!secrets.getOAuthAccessToken) throw new Error("OAuth credential provider is unavailable");
+    environment[credential.env] = await secrets.getOAuthAccessToken(id, credential);
+  }
   return environment;
 }
 
 export async function runPluginProcess(options: RunPluginProcessOptions): Promise<Json> {
   const child = fork(workerPath, [], {
-    env: await resolvePluginEnvironment(options.env, options.secrets),
+    env: await resolvePluginEnvironment(options.env, options.secrets, options.credentials),
     execArgv: workerPath.endsWith(".ts") ? ["--experimental-strip-types"] : [],
     stdio: ["ignore", "ignore", "ignore", "ipc"],
   });

@@ -12,6 +12,7 @@ import { registerLaunchAgent, unregisterLaunchAgent } from "./launch-agent.ts";
 import { projectStatus, tickProject, updateInvocation } from "./operations.ts";
 import { JsonLogger } from "@jugyo/duex";
 import { TextLogger } from "./text-logger.ts";
+import { findOAuthCredential, OAuthCredentialService } from "./oauth.ts";
 
 interface CliDependencies {
   projectRoot: string;
@@ -80,6 +81,7 @@ function usage(error: (message: string) => void): number {
   error("          event-hub secret add|update <reference>");
   error("          event-hub secret list");
   error("          event-hub secret delete <reference>");
+  error("          event-hub auth login|status|logout <credential-id> [--root <directory>]");
   return 2;
 }
 
@@ -155,6 +157,27 @@ export async function run(argv = process.argv.slice(2), dependencies = defaultDe
       };
       const result = subject === "register" ? await registerLaunchAgent(options) : await unregisterLaunchAgent(options);
       dependencies.out(`LaunchAgent ${subject === "register" ? "registered" : "unregistered"}: ${result.label}`);
+      return 0;
+    }
+    if (
+      command === "auth" &&
+      (subject === "login" || subject === "status" || subject === "logout") &&
+      name &&
+      extra.length === 0
+    ) {
+      const credential = await findOAuthCredential(projectRoot, name);
+      if (!credential) throw new Error(`OAuth credential ${JSON.stringify(name)} was not found`);
+      const service = new OAuthCredentialService({ backend, secrets });
+      if (subject === "login") {
+        await service.login(name, credential);
+        dependencies.out(`OAuth login complete: ${name}`);
+      } else if (subject === "logout") {
+        await service.logout(name);
+        dependencies.out(`OAuth credential deleted: ${name}`);
+      } else {
+        const status = await service.status(name);
+        dependencies.out(json ? JSON.stringify({ id: name, status }) : `${name}\t${status}`);
+      }
       return 0;
     }
     if (command !== "secret" || subject === undefined || extra.length > 0) return usage(dependencies.error);

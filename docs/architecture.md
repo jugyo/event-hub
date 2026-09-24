@@ -35,6 +35,14 @@ Stable IDs namespace source positions, consumer delivery state, schedules, and i
 
 A child never inherits the complete parent environment. Its environment contains only required runtime values and mappings explicitly resolved for that execution. Secret values are never persisted in manifests, configuration, events, journals, plist files, or diagnostic logs. Values are resolved again on every retry.
 
+An OAuth 2.0 PKCE credential declaration names HTTPS authorization and token endpoints, a Client ID
+secret reference, scopes, and one target environment variable. The host stores Access Token, Refresh
+Token, token type, expiry, and granted scopes together in macOS Keychain. Before process startup it uses
+the saved token when sufficiently fresh or performs one credential-scoped refresh shared by concurrent
+executions. Refresh-token rotation replaces the whole bundle with one Keychain update. A missing bundle,
+an expired bundle without a Refresh Token, or `invalid_grant` produces the fixed
+`OAUTH_REAUTHORIZATION_REQUIRED` error and never starts an interactive browser from a scheduled run.
+
 The initial implementation passes no implicit ordinary environment variables. Node.js and the worker are invoked by absolute path, so even `PATH` and `HOME` are not inherited.
 
 ## Source and consumer APIs

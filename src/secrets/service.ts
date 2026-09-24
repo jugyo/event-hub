@@ -3,6 +3,8 @@ import { dirname, resolve } from "node:path";
 
 import { CONFIG_FILENAME } from "../init.ts";
 import { SecretBackendError, type SecretBackend } from "./backend.ts";
+import { OAuthCredentialService } from "../oauth.ts";
+import type { OAuth2PkceCredential } from "../plugins/manifest.ts";
 
 const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -65,11 +67,13 @@ export class SecretService {
   readonly projectRoot: string;
   readonly backend: SecretBackend;
   readonly #writeConfig: ConfigWriter;
+  readonly #oauth: OAuthCredentialService;
 
   constructor(projectRoot: string, backend: SecretBackend, writeConfig: ConfigWriter = saveConfig) {
     this.projectRoot = projectRoot;
     this.backend = backend;
     this.#writeConfig = writeConfig;
+    this.#oauth = new OAuthCredentialService({ backend, secrets: this });
   }
 
   async list(): Promise<string[]> {
@@ -149,5 +153,9 @@ export class SecretService {
     delete remaining[name];
     config.secrets = remaining;
     await this.#writeConfig(path, config);
+  }
+
+  async getOAuthAccessToken(id: string, config: OAuth2PkceCredential): Promise<string> {
+    return this.#oauth.accessToken(id, config);
   }
 }
