@@ -11,6 +11,7 @@ const base = {
 } as const;
 
 const validManifests = [
+  { ...base, kind: "source", trigger: { type: "poll", every: "1m", backfill: "1d" } },
   { ...base, kind: "source", trigger: { type: "poll", everyMs: 60_000 } },
   {
     ...base,
@@ -27,10 +28,10 @@ const validManifests = [
 // This unreachable block exists only for compile-time contract assertions.
 // eslint-disable-next-line no-constant-condition
 if (false) {
+  // @ts-expect-error A source cannot declare an event subscription.
   const sourceWithEvents: PluginManifest = {
     ...base,
     kind: "source",
-    // @ts-expect-error A source cannot declare an event subscription.
     trigger: { type: "events", eventTypes: ["example.changed"] },
   };
   // @ts-expect-error A consumer cannot declare polling.
@@ -41,8 +42,23 @@ if (false) {
   };
   void sourceWithEvents;
   void consumerWithPolling;
+
+  const sourceWithConflictingIntervals: PluginManifest = {
+    ...base,
+    kind: "source",
+    // @ts-expect-error A source cannot declare both polling interval forms.
+    trigger: { type: "poll", every: "1m", everyMs: 60_000 },
+  };
+  const sourceWithConflictingBackfills: PluginManifest = {
+    ...base,
+    kind: "source",
+    // @ts-expect-error A source cannot declare both backfill forms.
+    trigger: { type: "poll", every: "1m", backfill: "1d", backfillMs: 86_400_000 },
+  };
+  void sourceWithConflictingIntervals;
+  void sourceWithConflictingBackfills;
 }
 
 test("plugin manifest types constrain each kind to its valid triggers", () => {
-  assert.equal(validManifests.length, 3);
+  assert.equal(validManifests.length, 4);
 });

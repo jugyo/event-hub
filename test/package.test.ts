@@ -110,7 +110,7 @@ const now = Date.now();
 const iso = offset => new Date(now + offset).toISOString();
 const healthy = await plugin("source", "healthy", {
   id: "healthy", kind: "source", entry: "index.mjs", config: { revision: 1 },
-  env: { TOKEN: "API_TOKEN" }, trigger: { type: "poll", everyMs: 60000, backfillMs: 604800000 },
+  env: { TOKEN: "API_TOKEN" }, trigger: { type: "poll", every: "1m", backfill: "7d" },
 }, \`export async function execute(ctx, input) {
   return ctx.run("fake-api", () => {
     if (process.env.TOKEN !== "acceptance-" + "secret-must-not-be-persisted" || process.env.EH_PARENT_SENTINEL !== undefined) throw new Error("environment mapping failed");
@@ -168,7 +168,7 @@ assert.equal(statuses.some(status => status.state === "invalid" && status.failur
 const healthyManifestPath = join(healthy, "plugin.json");
 const updatedManifest = JSON.parse(await readFile(healthyManifestPath, "utf8"));
 updatedManifest.config.revision = 2;
-delete updatedManifest.trigger.backfillMs;
+delete updatedManifest.trigger.backfill;
 await writeFile(healthyManifestPath, JSON.stringify(updatedManifest, null, 2) + "\\n");
 let store = new EventStore({ path: join(root, ".event-hub", "events.sqlite") });
 store.migrate();

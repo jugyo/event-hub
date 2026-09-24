@@ -8,7 +8,7 @@ import {
   type Logger,
 } from "@jugyo/duex";
 import { deliverConsumerEvent, runConsumerPlugin } from "./consumers/execution.ts";
-import type { PluginManifest, SourcePluginManifest } from "./plugins/manifest.ts";
+import type { NormalizedPluginManifest, NormalizedSourcePluginManifest } from "./plugins/manifest.ts";
 import { runPluginProcess, type SecretProvider } from "./plugins/process/executor.ts";
 import { pollSource, type SourcePollPage } from "./sources/polling.ts";
 import type { EventInput, EventStore, PluginRegistration } from "./storage/event-store.ts";
@@ -91,7 +91,7 @@ export function createPluginWorkflows(options: PluginWorkflowOptions): WorkflowD
       async run(context, input: unknown) {
         const pluginId = inputPluginId(input);
         const plugin = registration(options.store, pluginId, "source");
-        const manifest = plugin.manifest as unknown as SourcePluginManifest;
+        const manifest = plugin.manifest as unknown as NormalizedSourcePluginManifest;
         const logger = options.logger?.child({
           pluginId,
           invocationId: context.invocationId,
@@ -142,7 +142,7 @@ export function createPluginWorkflows(options: PluginWorkflowOptions): WorkflowD
       async run(context, input: unknown) {
         const pluginId = inputPluginId(input);
         const plugin = registration(options.store, pluginId, "consumer");
-        const manifest = plugin.manifest as unknown as PluginManifest;
+        const manifest = plugin.manifest as unknown as NormalizedPluginManifest;
         const logger = options.logger?.child({
           pluginId,
           invocationId: context.invocationId,
@@ -209,7 +209,7 @@ export function createPluginWorkflows(options: PluginWorkflowOptions): WorkflowD
         const eventId = (input as { eventId?: unknown }).eventId;
         if (typeof eventId !== "string") throw new TerminalError("event consumer invocation input is invalid");
         const plugin = registration(options.store, pluginId, "consumer");
-        const manifest = plugin.manifest as unknown as PluginManifest;
+        const manifest = plugin.manifest as unknown as NormalizedPluginManifest;
         if (manifest.kind !== "consumer" || manifest.trigger.type !== "events") {
           throw new TerminalError(`consumer plugin ${JSON.stringify(pluginId)} is not event-triggered`);
         }

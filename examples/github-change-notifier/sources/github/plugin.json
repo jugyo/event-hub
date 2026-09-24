@@ -12,7 +12,7 @@
   },
   "trigger": {
     "type": "poll",
-    "everyMs": 300000,
-    "backfillMs": 86400000
+    "every": "5m",
+    "backfill": "1d"
   }
 }

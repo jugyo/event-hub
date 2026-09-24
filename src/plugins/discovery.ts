@@ -3,7 +3,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 
 import type { EventStore, Json, PluginRegistrationInput } from "../storage/event-store.ts";
-import type { PluginKind, PluginManifest } from "./manifest.ts";
+import type { NormalizedPluginManifest, PluginKind } from "./manifest.ts";
 
 export type PluginDiagnosticCode =
   | "MANIFEST_MISSING"
@@ -37,13 +37,22 @@ export interface PluginDiscoveryResult {
 interface Candidate {
   directory: string;
   expectedKind: PluginKind;
-  manifest?: PluginManifest;
+  manifest?: NormalizedPluginManifest;
   entrypoint?: string;
 }
 
 const ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,127})$/;
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const CODE_EXTENSION_PATTERN = /\.(?:[cm]?[jt]s)$/;
+const DURATION_PATTERN = /^(\d+(?:\.\d+)?)(ms|s|m|h|d|w)$/;
+const DURATION_UNIT_MS = {
+  ms: 1,
+  s: 1_000,
+  m: 60_000,
+  h: 60 * 60_000,
+  d: 24 * 60 * 60_000,
+  w: 7 * 24 * 60 * 60_000,
+} as const;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -65,33 +74,76 @@ function isValidTimeZone(value: string): boolean {
   }
 }
 
-function validateTrigger(kind: PluginKind, value: unknown): boolean {
-  if (!isObject(value) || typeof value.type !== "string") return false;
+function validMilliseconds(value: number, label: string): number {
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
+    throw new TypeError(`${label} must resolve to a positive whole number of milliseconds`);
+  }
+  return value;
+}
+
+function durationMs(value: unknown, label: string): number {
+  if (typeof value !== "string") throw new TypeError(`${label} must be a duration string`);
+  const match = DURATION_PATTERN.exec(value);
+  if (!match) throw new TypeError(`${label} must be a positive duration such as "5m" or "1d"`);
+  const unit = match[2] as keyof typeof DURATION_UNIT_MS;
+  const duration = Number(match[1]) * DURATION_UNIT_MS[unit];
+  return validMilliseconds(duration, label);
+}
+
+function positiveMilliseconds(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new TypeError(`${label} must be a positive finite number`);
+  }
+  return value;
+}
+
+function normalizeTrigger(kind: PluginKind, value: unknown): NormalizedPluginManifest["trigger"] {
+  if (!isObject(value) || typeof value.type !== "string") {
+    throw new TypeError(`The trigger for ${kind} is invalid`);
+  }
   if (kind === "source") {
-    return (
-      value.type === "poll" &&
-      Number.isFinite(value.everyMs) &&
-      Number(value.everyMs) > 0 &&
-      (value.backfillMs === undefined || (Number.isFinite(value.backfillMs) && Number(value.backfillMs) > 0))
-    );
+    if (value.type !== "poll") throw new TypeError("The trigger for source is invalid");
+    if (value.every !== undefined && value.everyMs !== undefined) {
+      throw new TypeError("trigger.every and trigger.everyMs cannot be specified together");
+    }
+    if (value.backfill !== undefined && value.backfillMs !== undefined) {
+      throw new TypeError("trigger.backfill and trigger.backfillMs cannot be specified together");
+    }
+    const everyMs =
+      value.every !== undefined
+        ? durationMs(value.every, "trigger.every")
+        : positiveMilliseconds(value.everyMs, "trigger.everyMs");
+    const backfillMs =
+      value.backfill !== undefined
+        ? durationMs(value.backfill, "trigger.backfill")
+        : value.backfillMs !== undefined
+          ? positiveMilliseconds(value.backfillMs, "trigger.backfillMs")
+          : undefined;
+    return { type: "poll", everyMs, ...(backfillMs === undefined ? {} : { backfillMs }) };
   }
   if (value.type === "events") {
-    return (
+    if (
       Array.isArray(value.eventTypes) &&
       value.eventTypes.length > 0 &&
       value.eventTypes.every((eventType) => typeof eventType === "string" && eventType.length > 0)
-    );
+    ) {
+      return { type: "events", eventTypes: value.eventTypes };
+    }
+    throw new TypeError("The trigger for consumer is invalid");
   }
-  return (
+  if (
     value.type === "daily" &&
     typeof value.at === "string" &&
     /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.at) &&
     typeof value.timezone === "string" &&
     isValidTimeZone(value.timezone)
-  );
+  ) {
+    return { type: "daily", at: value.at, timezone: value.timezone };
+  }
+  throw new TypeError("The trigger for consumer is invalid");
 }
 
-function parseManifest(value: unknown): PluginManifest {
+function parseManifest(value: unknown): NormalizedPluginManifest {
   if (!isObject(value)) throw new TypeError("The manifest must be a JSON object");
   if (typeof value.id !== "string" || !ID_PATTERN.test(value.id)) {
     throw new TypeError("id must be a stable ID of at most 128 characters starting with a lowercase letter or digit");
@@ -116,10 +168,8 @@ function parseManifest(value: unknown): PluginManifest {
   ) {
     throw new TypeError("env must map plugin environment variable names to host secret references");
   }
-  if (!validateTrigger(value.kind, value.trigger)) {
-    throw new TypeError(`The trigger for ${value.kind} is invalid`);
-  }
-  return value as unknown as PluginManifest;
+  const trigger = normalizeTrigger(value.kind, value.trigger);
+  return { ...value, trigger } as NormalizedPluginManifest;
 }
 
 function diagnostic(code: PluginDiagnosticCode, path: string, message: string, id?: string): PluginDiagnostic {

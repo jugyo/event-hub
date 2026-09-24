@@ -30,7 +30,15 @@ export type {
 
 export { discoverAndSyncPlugins } from "./plugins/discovery.ts";
 export type { PluginDiagnostic, PluginDiscoveryOptions, PluginDiscoveryResult } from "./plugins/discovery.ts";
-export type { ConsumerPluginManifest, PluginKind, PluginManifest, SourcePluginManifest } from "./plugins/manifest.ts";
+export type {
+  ConsumerPluginManifest,
+  DurationString,
+  NormalizedPluginManifest,
+  NormalizedSourcePluginManifest,
+  PluginKind,
+  PluginManifest,
+  SourcePluginManifest,
+} from "./plugins/manifest.ts";
 export { PluginProcessError, resolvePluginEnvironment, runPluginProcess } from "./plugins/process/executor.ts";
 export type { PluginProcessErrorCode, RunPluginProcessOptions, SecretProvider } from "./plugins/process/executor.ts";
 export type { PluginErrorCode, PluginModule, PluginStepContext } from "./plugins/process/contract.ts";

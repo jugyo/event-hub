@@ -12,7 +12,7 @@ import {
 } from "@jugyo/duex";
 import { discoverAndSyncPlugins, type PluginDiagnostic } from "./plugins/discovery.ts";
 import type { SecretProvider } from "./plugins/process/executor.ts";
-import type { PluginManifest } from "./plugins/manifest.ts";
+import type { NormalizedPluginManifest } from "./plugins/manifest.ts";
 import { enqueueConsumerDeliveries, syncPluginSchedules } from "./scheduling.ts";
 import { EventStore, type PluginRegistration } from "./storage/event-store.ts";
 import { CONFIG_FILENAME } from "./init.ts";
@@ -173,7 +173,7 @@ export async function projectStatus(projectRoot: string, secrets: SecretProvider
         ["completed", "failed", "retry_wait", "cancelled"].includes(invocation.status),
       );
       const failed = last?.status === "failed" || last?.status === "retry_wait" ? last : undefined;
-      const manifest = plugin.manifest as unknown as PluginManifest;
+      const manifest = plugin.manifest as unknown as NormalizedPluginManifest;
       // An event consumer runs one invocation per delivery attempt, so its backlog and failures live in
       // delivery state; a later successful delivery must not hide an earlier failed one.
       const events = manifest.kind === "consumer" && manifest.trigger.type === "events";

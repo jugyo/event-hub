@@ -54,9 +54,14 @@ Example polling source manifest:
   "entry": "index.mjs",
   "config": { "repository": "owner/name" },
   "env": { "API_TOKEN": "WORK_API_TOKEN" },
-  "trigger": { "type": "poll", "everyMs": 60000, "backfillMs": 86400000 }
+  "trigger": { "type": "poll", "every": "1m", "backfill": "1d" }
 }
 ```
+
+Polling durations accept a positive number followed by `ms`, `s`, `m`, `h`, `d`, or `w` and must
+resolve to at least one whole millisecond. The numeric `everyMs` and `backfillMs` fields remain
+supported for compatibility. Do not specify `every` together with `everyMs`, or `backfill` together
+with `backfillMs`.
 
 Example source implementation:
 

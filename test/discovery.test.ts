@@ -213,3 +213,71 @@ test("diagnoses an invalid IANA time zone in a daily trigger", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("normalizes source duration strings while preserving millisecond settings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub durations "));
+  const store = new EventStore({ path: ":memory:" });
+  try {
+    store.migrate();
+    await writePlugin(root, "sources", "duration", {
+      ...sourceManifest("source.duration"),
+      trigger: { type: "poll", every: "1.5h", backfill: "1d" },
+    });
+    await writePlugin(root, "sources", "milliseconds", {
+      ...sourceManifest("source.milliseconds"),
+      trigger: { type: "poll", everyMs: 1.1, backfillMs: 86_400_000.5 },
+    });
+
+    const result = await discoverAndSyncPlugins({ projectRoot: root, store, now: T1 });
+
+    assert.deepEqual(result.diagnostics, []);
+    assert.deepEqual(
+      result.plugins.map(({ manifest }) => (manifest as { trigger: unknown }).trigger),
+      [
+        { type: "poll", everyMs: 5_400_000, backfillMs: 86_400_000 },
+        { type: "poll", everyMs: 1.1, backfillMs: 86_400_000.5 },
+      ],
+    );
+  } finally {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("diagnoses conflicting and invalid source durations per plugin", async () => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub invalid durations "));
+  const store = new EventStore({ path: ":memory:" });
+  try {
+    store.migrate();
+    const triggers = [
+      { type: "poll", every: "1m", everyMs: 60_000 },
+      { type: "poll", every: "1m", backfill: "1d", backfillMs: 86_400_000 },
+      { type: "poll", every: "tomorrow" },
+      { type: "poll", every: "0s" },
+      { type: "poll", every: "0.1ms" },
+      { type: "poll", every: "1.1ms" },
+      { type: "poll", every: "-1h" },
+      { type: "poll", everyMs: 0 },
+      { type: "poll", everyMs: "1000" },
+      { type: "poll", every: "1m", backfill: "0d" },
+    ];
+    await Promise.all(
+      triggers.map((trigger, index) =>
+        writePlugin(root, "sources", `invalid-${index}`, {
+          ...sourceManifest(`source.invalid-${index}`),
+          trigger,
+        }),
+      ),
+    );
+
+    const result = await discoverAndSyncPlugins({ projectRoot: root, store, now: T1 });
+
+    assert.deepEqual(result.plugins, []);
+    assert.equal(result.diagnostics.length, triggers.length);
+    assert.ok(result.diagnostics.every(({ code }) => code === "MANIFEST_INVALID"));
+    assert.ok(result.diagnostics.every(({ id }) => id?.startsWith("source.invalid-")));
+  } finally {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -21,7 +21,7 @@ Plugin folders are discovered on the next run. Removing a folder disables new wo
 
 The source pages through GitHub's commits API with `since` and `until`. It stores the repository, SHA, message, author, URL, occurrence time, and observation time needed for historical queries. `occurredAt` uses the committer date so API windows and daily aggregation align; the author date is stored as `payload.authoredAt`.
 
-Backfill defaults to 24 hours and can be changed with `trigger.backfillMs`. This limits new upstream collection only. Stored history is retained indefinitely, and the daily consumer queries both the past 24 hours and the past week.
+Backfill defaults to 24 hours and can be changed with `trigger.backfill` (for example, `"1d"`) or the compatible numeric `trigger.backfillMs` form. Poll intervals likewise accept `trigger.every` or `trigger.everyMs`. The string form accepts a positive number followed by `ms`, `s`, `m`, `h`, `d`, or `w` and must resolve to at least one whole millisecond; do not specify both forms for the same setting. The backfill limit applies to new upstream collection only. Stored history is retained indefinitely, and the daily consumer queries both the past 24 hours and the past week.
 
 This is not a complete record of every GitHub push. History may be incomplete because of force pushes, deleted branches, API retention or visibility, rate limits, or downtime longer than the configured backfill period. Events collected after a daily window has completed are not automatically added to the old summary.
 

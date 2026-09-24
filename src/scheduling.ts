@@ -1,6 +1,6 @@
 import { nextDailySlot, type Logger, type RuntimeApi, type ScheduleRecord } from "@jugyo/duex";
 import type { EventStore, PluginRegistration } from "./storage/event-store.ts";
-import type { PluginManifest } from "./plugins/manifest.ts";
+import type { NormalizedPluginManifest } from "./plugins/manifest.ts";
 import {
   createPluginWorkflows,
   DAILY_CONSUMER_WORKFLOW,
@@ -27,7 +27,7 @@ export async function enqueueConsumerDeliveries(options: EnqueueConsumerDeliveri
   const now = options.now ?? new Date().toISOString();
   let created = 0;
   for (const plugin of options.plugins.filter(({ active }) => active)) {
-    const manifest = plugin.manifest as unknown as PluginManifest;
+    const manifest = plugin.manifest as unknown as NormalizedPluginManifest;
     if (manifest.kind !== "consumer" || manifest.trigger.type !== "events") continue;
     // One consumer's enqueue failure (for example, a concurrent tick retrying the same invocation first)
     // must not stop other consumers or the tick itself.
@@ -97,7 +97,7 @@ export function syncPluginSchedules(options: SyncPluginSchedulesOptions): SyncPl
   }
 
   for (const plugin of options.plugins.filter(({ active }) => active)) {
-    const manifest = plugin.manifest as unknown as PluginManifest;
+    const manifest = plugin.manifest as unknown as NormalizedPluginManifest;
     if (manifest.kind === "consumer" && manifest.trigger.type !== "daily") continue;
     const id = scheduleId(manifest.kind, plugin.id);
     expected.add(id);

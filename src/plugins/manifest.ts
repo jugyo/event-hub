@@ -1,6 +1,7 @@
 import type { Json } from "../storage/event-store.ts";
 
 export type PluginKind = "source" | "consumer";
+export type DurationString = `${number}${"ms" | "s" | "m" | "h" | "d" | "w"}`;
 
 interface PluginManifestBase {
   id: string;
@@ -9,7 +10,16 @@ interface PluginManifestBase {
   env: Record<string, string>;
 }
 
+type PollInterval = { every: DurationString; everyMs?: never } | { every?: never; everyMs: number };
+
+type PollBackfill = { backfill?: DurationString; backfillMs?: never } | { backfill?: never; backfillMs?: number };
+
 export interface SourcePluginManifest extends PluginManifestBase {
+  kind: "source";
+  trigger: { type: "poll" } & PollInterval & PollBackfill;
+}
+
+export interface NormalizedSourcePluginManifest extends PluginManifestBase {
   kind: "source";
   trigger: { type: "poll"; everyMs: number; backfillMs?: number };
 }
@@ -20,3 +30,4 @@ export interface ConsumerPluginManifest extends PluginManifestBase {
 }
 
 export type PluginManifest = SourcePluginManifest | ConsumerPluginManifest;
+export type NormalizedPluginManifest = NormalizedSourcePluginManifest | ConsumerPluginManifest;
