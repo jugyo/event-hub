@@ -7,16 +7,6 @@ interface PluginManifestBase {
   entry: string;
   config: Json;
   env: Record<string, string>;
-  credentials?: Record<string, OAuth2PkceCredential>;
-}
-
-export interface OAuth2PkceCredential {
-  type: "oauth2-pkce";
-  authorizationEndpoint: string;
-  tokenEndpoint: string;
-  clientId: string;
-  scopes: string[];
-  env: string;
 }
 
 export interface SourcePluginManifest extends PluginManifestBase {

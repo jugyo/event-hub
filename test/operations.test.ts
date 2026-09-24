@@ -11,7 +11,6 @@ import { run } from "../src/cli.ts";
 import type { SecretBackend } from "../src/secrets/backend.ts";
 import { EventStore, type Json } from "../src/storage/event-store.ts";
 import { EVENT_CONSUMER_WORKFLOW } from "../src/workflows.ts";
-import { OAuthCredentialError } from "../src/oauth.ts";
 import type { InvocationRecord, TickResult } from "@jugyo/duex";
 
 const secrets = { get: () => undefined };
@@ -271,57 +270,6 @@ export const execute = (ctx, input) => ctx.run("deliver", async () => {
       { id: "healthy", state: "ready", pending: 0, failure: null },
     ],
   );
-});
-
-test("status exposes OAuth reauthorization as a terminal event-consumer failure", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "event-hub oauth consumer "));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await initProject(root);
-  const directory = join(root, "consumers", "oauth-consumer");
-  await mkdir(directory);
-  await writeFile(
-    join(directory, "plugin.json"),
-    `${JSON.stringify({
-      id: "oauth-consumer",
-      kind: "consumer",
-      entry: "index.mjs",
-      config: null,
-      env: {},
-      credentials: {
-        account: {
-          type: "oauth2-pkce",
-          authorizationEndpoint: "https://provider.example/authorize",
-          tokenEndpoint: "https://provider.example/token",
-          clientId: "CLIENT_ID",
-          scopes: ["read"],
-          env: "ACCESS_TOKEN",
-        },
-      },
-      trigger: { type: "events", eventTypes: ["example.changed"] },
-    })}\n`,
-  );
-  await writeFile(join(directory, "index.mjs"), "export const execute = () => null;\n");
-  const credentialProvider = {
-    get: () => undefined,
-    getOAuthAccessToken: async () => {
-      throw new OAuthCredentialError("OAUTH_REAUTHORIZATION_REQUIRED");
-    },
-  };
-
-  await tickProject(root, credentialProvider);
-  appendEvents(root, { id: "requires-login" });
-  await tickProject(root, credentialProvider);
-
-  withEventStore(root, (store) => {
-    const delivery = store.getDelivery("oauth-consumer", "requires-login");
-    assert.equal(delivery?.status, "failed");
-    assert.equal(delivery?.attempt, 1);
-    assert.equal(delivery?.errorCode, "OAUTH_REAUTHORIZATION_REQUIRED");
-  });
-  const [status] = await projectStatus(root, credentialProvider);
-  assert.equal(status.state, "failed");
-  assert.equal(status.pending, 0);
-  assert.equal(status.failure, "event requires-login failed: OAUTH_REAUTHORIZATION_REQUIRED");
 });
 
 test("concurrent ticks execute a delivery attempt once", async (t) => {

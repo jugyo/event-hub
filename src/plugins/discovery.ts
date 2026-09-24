@@ -3,14 +3,13 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 
 import type { EventStore, Json, PluginRegistrationInput } from "../storage/event-store.ts";
-import type { OAuth2PkceCredential, PluginKind, PluginManifest } from "./manifest.ts";
+import type { PluginKind, PluginManifest } from "./manifest.ts";
 
 export type PluginDiagnosticCode =
   | "MANIFEST_MISSING"
   | "MANIFEST_INVALID"
   | "KIND_MISMATCH"
   | "DUPLICATE_ID"
-  | "CREDENTIAL_CONFLICT"
   | "ENTRYPOINT_MISSING"
   | "CROSS_PLUGIN_IMPORT";
 
@@ -92,47 +91,6 @@ function validateTrigger(kind: PluginKind, value: unknown): boolean {
   );
 }
 
-function isHttpsUrl(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  try {
-    return new URL(value).protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function validateCredentials(value: unknown): value is Record<string, OAuth2PkceCredential> {
-  return (
-    value === undefined ||
-    (isObject(value) &&
-      Object.entries(value).every(
-        ([id, credential]) =>
-          ID_PATTERN.test(id) &&
-          isObject(credential) &&
-          credential.type === "oauth2-pkce" &&
-          isHttpsUrl(credential.authorizationEndpoint) &&
-          isHttpsUrl(credential.tokenEndpoint) &&
-          typeof credential.clientId === "string" &&
-          ENV_NAME_PATTERN.test(credential.clientId) &&
-          Array.isArray(credential.scopes) &&
-          credential.scopes.length > 0 &&
-          credential.scopes.every((scope) => typeof scope === "string" && scope.length > 0) &&
-          typeof credential.env === "string" &&
-          ENV_NAME_PATTERN.test(credential.env),
-      ))
-  );
-}
-
-function credentialIdentity(credential: OAuth2PkceCredential): string {
-  return JSON.stringify({
-    type: credential.type,
-    authorizationEndpoint: credential.authorizationEndpoint,
-    tokenEndpoint: credential.tokenEndpoint,
-    clientId: credential.clientId,
-    scopes: credential.scopes,
-  });
-}
-
 function parseManifest(value: unknown): PluginManifest {
   if (!isObject(value)) throw new TypeError("The manifest must be a JSON object");
   if (typeof value.id !== "string" || !ID_PATTERN.test(value.id)) {
@@ -157,23 +115,6 @@ function parseManifest(value: unknown): PluginManifest {
     )
   ) {
     throw new TypeError("env must map plugin environment variable names to host secret references");
-  }
-  if (!validateCredentials(value.credentials)) {
-    throw new TypeError("credentials must contain valid OAuth 2.0 PKCE declarations");
-  }
-  const environment = value.env as Record<string, string>;
-  const credentialEnvironments = Object.values(value.credentials ?? {}).map(({ env }) => env);
-  if (new Set(credentialEnvironments).size !== credentialEnvironments.length) {
-    throw new TypeError("credentials must use distinct plugin environment variables");
-  }
-  if (
-    isObject(value.credentials) &&
-    Object.values(value.credentials).some(
-      (credential) =>
-        isObject(credential) && typeof credential.env === "string" && Object.hasOwn(environment, credential.env),
-    )
-  ) {
-    throw new TypeError("credential environment variables cannot also appear in env");
   }
   if (!validateTrigger(value.kind, value.trigger)) {
     throw new TypeError(`The trigger for ${value.kind} is invalid`);
@@ -321,9 +262,7 @@ async function crossPluginImport(candidate: Candidate, allDirectories: string[])
   return null;
 }
 
-export async function discoverPlugins(
-  options: Omit<PluginDiscoveryOptions, "store" | "now">,
-): Promise<PluginDiscoveryResult> {
+export async function discoverAndSyncPlugins(options: PluginDiscoveryOptions): Promise<PluginDiscoveryResult> {
   const projectRoot = resolve(options.projectRoot);
   const candidates = [
     ...(await pluginDirectories(resolve(projectRoot, options.sourcesPath ?? "sources"), "source")),
@@ -346,31 +285,6 @@ export async function discoverPlugins(
     for (const candidate of duplicates) {
       diagnostics.push(
         diagnostic("DUPLICATE_ID", candidate.directory, `Duplicate plugin ID ${JSON.stringify(id)}`, id),
-      );
-      candidate.manifest = undefined;
-    }
-  }
-
-  const credentialDeclarations = new Map<string, { candidate: Candidate; identity: string }[]>();
-  for (const candidate of candidates) {
-    if (!candidate.manifest) continue;
-    for (const [id, credential] of Object.entries(candidate.manifest.credentials ?? {})) {
-      const declarations = credentialDeclarations.get(id) ?? [];
-      declarations.push({ candidate, identity: credentialIdentity(credential) });
-      credentialDeclarations.set(id, declarations);
-    }
-  }
-  for (const [id, declarations] of credentialDeclarations) {
-    if (new Set(declarations.map(({ identity }) => identity)).size < 2) continue;
-    for (const { candidate } of declarations) {
-      if (!candidate.manifest) continue;
-      diagnostics.push(
-        diagnostic(
-          "CREDENTIAL_CONFLICT",
-          candidate.directory,
-          `OAuth credential ${JSON.stringify(id)} conflicts with another plugin declaration`,
-          candidate.manifest.id,
-        ),
       );
       candidate.manifest = undefined;
     }
@@ -408,11 +322,6 @@ export async function discoverPlugins(
   );
   plugins.sort((left, right) => left.id.localeCompare(right.id));
   diagnostics.sort((left, right) => left.path.localeCompare(right.path) || left.code.localeCompare(right.code));
+  options.store.syncPluginRegistrations(plugins, options.now ?? new Date().toISOString());
   return { plugins, diagnostics };
-}
-
-export async function discoverAndSyncPlugins(options: PluginDiscoveryOptions): Promise<PluginDiscoveryResult> {
-  const result = await discoverPlugins(options);
-  options.store.syncPluginRegistrations(result.plugins, options.now ?? new Date().toISOString());
-  return result;
 }

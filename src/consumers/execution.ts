@@ -7,8 +7,6 @@ import {
   type RunPluginProcessOptions,
   type SecretProvider,
 } from "../plugins/process/executor.ts";
-import type { OAuth2PkceCredential } from "../plugins/manifest.ts";
-import { OAuthCredentialError } from "../oauth.ts";
 
 const DEFAULT_DELIVERY_RETRY: Required<RetryPolicy> = {
   maxAttempts: 3,
@@ -23,7 +21,6 @@ export interface RunConsumerPluginOptions {
   entry: string;
   input: Json;
   env: Record<string, string>;
-  credentials?: Record<string, OAuth2PkceCredential>;
   secrets: SecretProvider;
   timeoutMs?: number;
   onSpawn?: RunPluginProcessOptions["onSpawn"];
@@ -45,7 +42,6 @@ export async function runConsumerPlugin(options: RunConsumerPluginOptions): Prom
     entry: options.entry,
     input: options.input,
     env: options.env,
-    credentials: options.credentials,
     secrets: options.secrets,
     timeoutMs: options.timeoutMs,
     onSpawn: options.onSpawn,
@@ -63,9 +59,7 @@ function retryDelay(attempt: number, policy: Required<RetryPolicy>): number {
 }
 
 function publicErrorCode(error: unknown): string {
-  return error instanceof PluginProcessError || error instanceof OAuthCredentialError
-    ? error.code
-    : "CONSUMER_EXECUTION_FAILED";
+  return error instanceof PluginProcessError ? error.code : "CONSUMER_EXECUTION_FAILED";
 }
 
 export async function deliverConsumerEvent(options: DeliverConsumerEventOptions): Promise<Json> {
@@ -113,7 +107,6 @@ export async function deliverConsumerEvent(options: DeliverConsumerEventOptions)
     const code = publicErrorCode(error);
     if (
       error instanceof TerminalError ||
-      (error instanceof OAuthCredentialError && error.code === "OAUTH_REAUTHORIZATION_REQUIRED") ||
       (error instanceof PluginProcessError && error.terminal) ||
       delivery.attempt >= retry.maxAttempts
     ) {
