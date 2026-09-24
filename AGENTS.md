@@ -1,9 +1,10 @@
-# Development guidance
+# 開発ガイダンス
 
-- Read REQUIREMENTS.md and the current issue before implementation. REQUIREMENTS.md is the source of truth; proposed details remain design choices until settled.
-- `@jugyo/duex` is a separate package resolved as `file:../mini-restate` during the migration period. Keep its runtime concerns out of this repository, and keep application-specific plugin and event store concerns out of `@jugyo/duex`. Change `@jugyo/duex` in its own repository, not here.
-- Plugin implementations execute in separate Node.js processes. Explicitly map environment variables; never inherit all parent secrets. Do not persist secret values in configuration, journals, or logs.
-- Do not add code snapshots, automatic compatibility guarantees, replay of historical events, untrusted-code sandboxing, or Source/Consumer execution-order dependencies. Plugin authors own update compatibility.
-- Retain stored events indefinitely. Source backfill defaults to 24 hours and is configurable; this does not limit history queries.
-- Follow the issue dependencies. Keep each change scoped to its acceptance criteria. Record design decisions and run relevant tests, including the `@jugyo/duex` package tests when its behavior changes.
-- Intended implementation runtime/model: Codex / gpt-5.6-sol. Starting workflows is a separate operator action.
+- 実装前に `REQUIREMENTS.md` と現在の課題を読む。`REQUIREMENTS.md` を唯一の正とし、提案段階の詳細は明示的に確定するまで設計上の選択肢として扱う。
+- Web UI または HTTP API を変更するときは、`docs/web-ui.md` を読み、その設計方針に従う。
+- `@jugyo/duex` は別パッケージであり、移行期間中は `file:../mini-restate` として解決する。その実行環境の関心事をこのリポジトリに持ち込まず、アプリケーション固有のプラグインとイベントストアの関心事を `@jugyo/duex` に持ち込まない。`@jugyo/duex` の変更はここではなく、そのリポジトリで行う。
+- プラグイン実装は別々の Node.js プロセスで実行する。環境変数を明示的に対応づけ、親プロセスの機密情報をすべて継承してはならない。機密値を設定、ジャーナル、ログに永続化しない。
+- コードのスナップショット、自動的な互換性保証、過去イベントの再実行、信頼できないコードのサンドボックス、Source / Consumer の実行順序への依存を追加しない。更新時の互換性はプラグイン作者が担う。
+- 保存済みイベントは無期限に保持する。Source backfill の既定値は 24 時間で変更可能とし、この制限を履歴クエリには適用しない。
+- 課題の依存関係に従う。各変更を受け入れ条件の範囲に限定する。設計判断を記録し、挙動を変更した場合の `@jugyo/duex` パッケージテストを含め、関連するテストを実行する。
+- 想定する実装ランタイムとモデルは Codex / gpt-5.6-sol とする。ワークフローの開始はオペレーターが別途行う。
