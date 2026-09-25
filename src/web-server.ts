@@ -5,9 +5,11 @@ import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CONFIG_FILENAME } from "./init.ts";
+import { readProjectStatus, type PluginStatus } from "./operations.ts";
 
 const LOOPBACK_HOST = "127.0.0.1";
 const DEFAULT_STATIC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "web");
+const EVENT_HUB_VERSION = "0.2.0";
 
 const contentTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -23,6 +25,16 @@ export interface WebServerOptions {
   signal?: AbortSignal;
   staticRoot?: string;
   onStarted?(url: string): void;
+  statusProvider?(projectRoot: string): Promise<PluginStatus[]>;
+}
+
+function sendJson(response: import("node:http").ServerResponse, status: number, body: unknown): void {
+  response.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+  });
+  response.end(JSON.stringify(body));
 }
 
 export interface RunningWebServer {
@@ -48,8 +60,31 @@ async function validateProjectRoot(projectRoot: string): Promise<void> {
 }
 
 function apiNotFound(response: import("node:http").ServerResponse): void {
-  response.writeHead(404, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify({ error: { code: "NOT_FOUND", message: "API route not found", details: null } }));
+  sendJson(response, 404, { error: { code: "NOT_FOUND", message: "API route not found", details: null } });
+}
+
+function publicPlugin(status: PluginStatus) {
+  return {
+    id: status.id,
+    kind: status.displayKind,
+    loadState: status.loadState,
+    lastRun: status.lastRunAt
+      ? {
+          startedAt: status.lastRunStartedAt,
+          finishedAt: status.lastRunFinishedAt,
+          status: status.lastRunStatus,
+        }
+      : null,
+    pendingWork: status.pending,
+    failure: status.failure
+      ? {
+          code: "PLUGIN_EXECUTION_FAILED",
+          message: "The plugin did not complete successfully",
+          occurredAt: status.lastRunAt,
+        }
+      : null,
+    diagnostics: status.diagnostics,
+  };
 }
 
 async function existingAsset(staticRoot: string, pathname: string): Promise<string | null> {
@@ -96,11 +131,59 @@ export async function startWebServer(options: WebServerOptions): Promise<Running
   } catch {
     throw new WebServerError("Web UI assets are unavailable");
   }
+  const startedAt = new Date().toISOString();
+  const projectName = options.projectRoot.split(sep).filter(Boolean).at(-1) ?? "event-hub";
+  const statusProvider = options.statusProvider ?? readProjectStatus;
 
   const server = createServer(async (request, response) => {
-    const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+    const url = new URL(request.url ?? "/", "http://localhost");
+    const pathname = url.pathname;
     if (pathname === "/api" || pathname.startsWith("/api/")) {
-      apiNotFound(response);
+      if (request.method !== "GET") {
+        response.writeHead(405, { allow: "GET", "content-type": "application/json; charset=utf-8" });
+        response.end(
+          JSON.stringify({ error: { code: "METHOD_NOT_ALLOWED", message: "Method not allowed", details: null } }),
+        );
+        return;
+      }
+      if (pathname !== "/api/v1/dashboard" && pathname !== "/api/v1/plugins") {
+        apiNotFound(response);
+        return;
+      }
+      if ([...url.searchParams].length > 0) {
+        sendJson(response, 400, {
+          error: {
+            code: "INVALID_QUERY",
+            message: "Invalid query",
+            details: { fields: [...new Set(url.searchParams.keys())] },
+          },
+        });
+        return;
+      }
+      try {
+        const plugins = (await statusProvider(options.projectRoot)).map(publicPlugin);
+        if (pathname === "/api/v1/plugins") {
+          sendJson(response, 200, { plugins });
+          return;
+        }
+        sendJson(response, 200, {
+          project: { name: projectName, version: EVENT_HUB_VERSION, startedAt },
+          summary: {
+            sources: plugins.filter(({ kind }) => kind === "source").length,
+            consumers: plugins.filter(({ kind }) => kind === "consumer").length,
+            unhealthy: plugins.filter(
+              ({ loadState, failure, diagnostics }) => loadState !== "loaded" || failure || diagnostics.length > 0,
+            ).length,
+            pendingWork: plugins.reduce((sum, plugin) => sum + plugin.pendingWork, 0),
+          },
+          plugins,
+          updatedAt: new Date().toISOString(),
+        });
+      } catch {
+        sendJson(response, 500, {
+          error: { code: "INTERNAL_ERROR", message: "An internal error occurred", details: null },
+        });
+      }
       return;
     }
     if (request.method !== "GET") {

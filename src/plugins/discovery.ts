@@ -16,17 +16,21 @@ export type PluginDiagnosticCode =
 export interface PluginDiagnostic {
   code: PluginDiagnosticCode;
   path: string;
+  kind: PluginKind;
   id?: string;
   message: string;
 }
 
 export interface PluginDiscoveryOptions {
   projectRoot: string;
-  store: EventStore;
-  now?: string;
   sourcesPath?: string;
   consumersPath?: string;
   manifestFilename?: string;
+}
+
+export interface PluginSyncOptions extends PluginDiscoveryOptions {
+  store: EventStore;
+  now?: string;
 }
 
 export interface PluginDiscoveryResult {
@@ -172,8 +176,14 @@ function parseManifest(value: unknown): NormalizedPluginManifest {
   return { ...value, trigger } as NormalizedPluginManifest;
 }
 
-function diagnostic(code: PluginDiagnosticCode, path: string, message: string, id?: string): PluginDiagnostic {
-  return { code, path, message, ...(id ? { id } : {}) };
+function diagnostic(
+  code: PluginDiagnosticCode,
+  path: string,
+  kind: PluginKind,
+  message: string,
+  id?: string,
+): PluginDiagnostic {
+  return { code, path, kind, message, ...(id ? { id } : {}) };
 }
 
 async function pluginDirectories(root: string, expectedKind: PluginKind): Promise<Candidate[]> {
@@ -203,6 +213,7 @@ async function loadCandidate(
       diagnostic(
         missing ? "MANIFEST_MISSING" : "MANIFEST_INVALID",
         manifestPath,
+        candidate.expectedKind,
         missing ? "Manifest not found" : "Could not parse the manifest as JSON",
       ),
     );
@@ -212,7 +223,9 @@ async function loadCandidate(
     candidate.manifest = parseManifest(raw);
   } catch (error) {
     const id = isObject(raw) && typeof raw.id === "string" ? raw.id : undefined;
-    diagnostics.push(diagnostic("MANIFEST_INVALID", manifestPath, (error as Error).message, id));
+    diagnostics.push(
+      diagnostic("MANIFEST_INVALID", manifestPath, candidate.expectedKind, (error as Error).message, id),
+    );
     return;
   }
   if (candidate.manifest.kind !== candidate.expectedKind) {
@@ -220,6 +233,7 @@ async function loadCandidate(
       diagnostic(
         "KIND_MISMATCH",
         manifestPath,
+        candidate.expectedKind,
         `A ${candidate.manifest.kind} manifest cannot be placed in a ${candidate.expectedKind} directory`,
         candidate.manifest.id,
       ),
@@ -241,6 +255,7 @@ async function loadCandidate(
       diagnostic(
         "ENTRYPOINT_MISSING",
         entrypoint,
+        candidate.expectedKind,
         "The entry point does not exist or points outside the plugin directory",
         candidate.manifest.id,
       ),
@@ -312,7 +327,7 @@ async function crossPluginImport(candidate: Candidate, allDirectories: string[])
   return null;
 }
 
-export async function discoverAndSyncPlugins(options: PluginDiscoveryOptions): Promise<PluginDiscoveryResult> {
+export async function discoverPlugins(options: PluginDiscoveryOptions): Promise<PluginDiscoveryResult> {
   const projectRoot = resolve(options.projectRoot);
   const candidates = [
     ...(await pluginDirectories(resolve(projectRoot, options.sourcesPath ?? "sources"), "source")),
@@ -334,7 +349,13 @@ export async function discoverAndSyncPlugins(options: PluginDiscoveryOptions): P
     if (duplicates.length < 2) continue;
     for (const candidate of duplicates) {
       diagnostics.push(
-        diagnostic("DUPLICATE_ID", candidate.directory, `Duplicate plugin ID ${JSON.stringify(id)}`, id),
+        diagnostic(
+          "DUPLICATE_ID",
+          candidate.directory,
+          candidate.expectedKind,
+          `Duplicate plugin ID ${JSON.stringify(id)}`,
+          id,
+        ),
       );
       candidate.manifest = undefined;
     }
@@ -349,6 +370,7 @@ export async function discoverAndSyncPlugins(options: PluginDiscoveryOptions): P
         diagnostic(
           "CROSS_PLUGIN_IMPORT",
           candidate.directory,
+          candidate.expectedKind,
           `A static import references another plugin implementation (${imported})`,
           candidate.manifest.id,
         ),
@@ -372,6 +394,11 @@ export async function discoverAndSyncPlugins(options: PluginDiscoveryOptions): P
   );
   plugins.sort((left, right) => left.id.localeCompare(right.id));
   diagnostics.sort((left, right) => left.path.localeCompare(right.path) || left.code.localeCompare(right.code));
-  options.store.syncPluginRegistrations(plugins, options.now ?? new Date().toISOString());
   return { plugins, diagnostics };
+}
+
+export async function discoverAndSyncPlugins(options: PluginSyncOptions): Promise<PluginDiscoveryResult> {
+  const result = await discoverPlugins(options);
+  options.store.syncPluginRegistrations(result.plugins, options.now ?? new Date().toISOString());
+  return result;
 }
