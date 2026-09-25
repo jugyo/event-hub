@@ -96,6 +96,30 @@ Consumers can subscribe to events or run daily:
 { "type": "daily", "at": "09:00", "timezone": "Asia/Tokyo" }
 ```
 
+イベント Consumer は `ctx.emit` で 1 件以上の派生イベントを発行できます。ホストは Consumer の
+stable ID を `sourceId` として設定し、プラグインはそれ以外のイベントフィールドを指定します。
+派生イベントは入力 delivery の完了とアトミックに保存され、Source イベントと同じ履歴照会、
+重複排除、後続 Consumer への配信の対象になります。
+
+```js
+export async function execute(ctx, input) {
+  await ctx.emit({
+    id: `article:${input.event.id}`,
+    externalId: input.event.externalId,
+    type: "article.extracted",
+    schemaVersion: 1,
+    occurredAt: input.event.occurredAt,
+    observedAt: new Date().toISOString(),
+    payload: { markdown: "# Article" },
+  });
+}
+```
+
+`ctx.emit` は 1 件のイベント、または空でない配列を受け取ります。各イベントには、空でない `id`、
+`externalId`、`type`、正の整数である `schemaVersion`、UTC ISO 8601 形式の `occurredAt` と
+`observedAt`、有限 JSON 値である `payload` が必要です。同じ delivery の再試行が冪等になるよう、
+入力イベントから安定した `externalId` を導出してください。
+
 Plugins run in separate Node.js processes. They may only receive environment variables explicitly mapped in their manifests. Source and consumer implementations must not import one another.
 
 See the [GitHub change notifier example](examples/github-change-notifier/README.md) and [architecture](docs/architecture.md) for the full contracts.

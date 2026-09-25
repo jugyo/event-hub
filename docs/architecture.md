@@ -47,6 +47,14 @@ When the previous completed position predates the backfill limit, `from` advance
 
 An event consumer receives an event envelope and ordinary configuration. A daily consumer receives a scheduled window and can query history through `ctx.queryHistory`. History queries are read-only and never redeliver events or move delivery cursors.
 
+イベント Consumer は `ctx.emit(event)` または `ctx.emit(events)` を呼び出して派生イベントを発行できます。
+ホストは各派生イベントの `sourceId` に発行元 Consumer の stable ID を設定します。プラグインは残りの
+標準 envelope フィールドを指定し、再試行時の重複排除のために安定した `externalId` を使用します。
+ホストは妥当な発行内容をプラグイン完了までバッファし、入力 delivery の完了と同じトランザクションで
+保存します。プラグイン失敗、不正なイベント、保存失敗のいずれの場合も、バッファしたイベントは保存せず、
+入力 delivery も完了しません。保存された派生イベントは履歴照会と後続 Consumer の通常の matching の
+対象になりますが、現在の tick 内での配信は実行順序として保証しません。
+
 Delivery state is independent for each `(consumerId, eventId)`:
 
 - `pending`: runnable;
@@ -91,7 +99,7 @@ After sleep or downtime, the `latest` catch-up policy runs only the newest misse
 
 ## IPC protocol
 
-IPC uses finite JSON discriminated-union messages and one child process per execution. The host sends `start`. The child sends `step.request`, and the host replies with `step.execute` or a journal-backed `step.result`. The child then sends `step.executed`. History uses `history.request` and `history.result`. Execution ends with `plugin.completed` or `plugin.failed`. Every request has a correlation ID.
+IPC uses finite JSON discriminated-union messages and one child process per execution. The host sends `start`. The child sends `step.request`, and the host replies with `step.execute` or a journal-backed `step.result`. The child then sends `step.executed`. History uses `history.request` and `history.result`; derived-event emission uses `emit.request` and `emit.result`. Execution ends with `plugin.completed` or `plugin.failed`. Every request has a correlation ID.
 
 Inputs, outputs, step results, and retry metadata must be finite JSON values. Schema violations, unknown or duplicate correlation IDs, and concurrent step requests are terminal protocol violations. Both host and child verify that no step is unfinished when the plugin returns.
 

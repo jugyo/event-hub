@@ -1,6 +1,6 @@
 import type { Logger, RetryPolicy, WorkflowContext } from "@jugyo/duex";
 import { TerminalError } from "@jugyo/duex";
-import type { EventRecord, EventStore, HistoryPage, Json } from "../storage/event-store.ts";
+import type { EventInput, EventRecord, EventStore, HistoryPage, Json } from "../storage/event-store.ts";
 import {
   PluginProcessError,
   runPluginProcess,
@@ -26,6 +26,7 @@ export interface RunConsumerPluginOptions {
   onSpawn?: RunPluginProcessOptions["onSpawn"];
   logger?: Logger;
   onHistoryQuery?: (page: HistoryPage) => void;
+  onEmit?: (events: EventInput[]) => void;
 }
 
 export interface DeliverConsumerEventOptions extends Omit<RunConsumerPluginOptions, "input"> {
@@ -50,6 +51,7 @@ export async function runConsumerPlugin(options: RunConsumerPluginOptions): Prom
       options.onHistoryQuery?.(page);
       return page;
     },
+    emitEvents: options.onEmit,
     logger: options.logger,
   });
 }
@@ -78,9 +80,11 @@ export async function deliverConsumerEvent(options: DeliverConsumerEventOptions)
     attempt: delivery.attempt,
   });
   try {
+    const emittedEvents: EventInput[] = [];
     const result = await runConsumerPlugin({
       ...options,
       logger,
+      onEmit: (events) => emittedEvents.push(...events),
       input: {
         event: {
           seq: options.event.seq,
@@ -96,7 +100,7 @@ export async function deliverConsumerEvent(options: DeliverConsumerEventOptions)
         config: options.config,
       },
     });
-    options.store.completeDelivery(options.consumerId, options.event.id, now().toISOString());
+    options.store.completeDeliveryWithEvents(options.consumerId, options.event.id, emittedEvents, now().toISOString());
     logger?.info("consumer.events_processed", { events: 1 });
     logger?.info("plugin.invocation_completed", {
       kind: "event_consumer",

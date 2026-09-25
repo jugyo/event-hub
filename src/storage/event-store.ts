@@ -507,14 +507,60 @@ export class EventStore {
   }
 
   completeDelivery(consumerId: string, eventId: string, completedAt: string): void {
+    this.completeDeliveryWithEvents(consumerId, eventId, [], completedAt);
+  }
+
+  completeDeliveryWithEvents(
+    consumerId: string,
+    eventId: string,
+    events: EventInput[],
+    completedAt: string,
+  ): EventRecord[] {
     completedAt = normalizeTimestamp(completedAt, "completedAt");
-    const result = this.#db
-      .prepare(
-        `UPDATE consumer_deliveries SET status = 'completed', completed_at = ?, next_attempt_at = NULL, error_code = NULL
+    const normalized = events.map((event) => {
+      if (!event.id || !event.externalId || !event.type)
+        throw new TypeError("event identifiers and type must not be empty");
+      if (!Number.isInteger(event.schemaVersion) || event.schemaVersion <= 0) {
+        throw new TypeError("schemaVersion must be a positive integer");
+      }
+      return {
+        ...event,
+        occurredAt: normalizeTimestamp(event.occurredAt, "occurredAt"),
+        observedAt: normalizeTimestamp(event.observedAt, "observedAt"),
+      };
+    });
+    return this.transaction(() => {
+      const inserted: EventRecord[] = [];
+      const insert = this.#db.prepare(
+        `INSERT INTO events (id, source_id, external_id, type, schema_version, occurred_at, observed_at, payload_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(source_id, external_id) DO NOTHING`,
+      );
+      for (const event of normalized) {
+        const result = insert.run(
+          event.id,
+          consumerId,
+          event.externalId,
+          event.type,
+          event.schemaVersion,
+          event.occurredAt,
+          event.observedAt,
+          stringify(event.payload),
+        );
+        if (result.changes === 1) {
+          const row = this.#db.prepare("SELECT * FROM events WHERE id = ?").get(event.id) as Row;
+          inserted.push(toEvent(row));
+        }
+      }
+      const result = this.#db
+        .prepare(
+          `UPDATE consumer_deliveries SET status = 'completed', completed_at = ?, next_attempt_at = NULL, error_code = NULL
        WHERE consumer_id = ? AND event_id = ? AND status = 'pending'`,
-      )
-      .run(completedAt, consumerId, eventId);
-    if (result.changes === 0) throw new Error("The delivery does not exist");
+        )
+        .run(completedAt, consumerId, eventId);
+      if (result.changes === 0) throw new Error("The delivery does not exist");
+      return inserted;
+    });
   }
 
   private transaction<T>(operation: () => T): T {

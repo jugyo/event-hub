@@ -1,5 +1,5 @@
 import type { Json } from "@jugyo/duex";
-import type { HistoryPage } from "../../storage/event-store.ts";
+import type { EventInput, HistoryPage } from "../../storage/event-store.ts";
 import type {
   HostToPluginMessage,
   PluginErrorCode,
@@ -7,6 +7,7 @@ import type {
   PluginStepContext,
   PluginToHostMessage,
 } from "./contract.ts";
+import { isEventInput } from "./contract.ts";
 
 let nextRequestId = 0;
 const pending = new Map<
@@ -17,6 +18,7 @@ const pending = new Map<
       resolve: (value: Json) => void;
     }
   | { type: "history"; resolve: (value: HistoryPage) => void }
+  | { type: "emit"; resolve: () => void }
 >();
 
 class PluginProtocolError extends Error {
@@ -54,6 +56,19 @@ const context: PluginStepContext = {
     return new Promise<HistoryPage>((resolve) => {
       pending.set(requestId, { type: "history", resolve });
       send({ type: "history.request", requestId, query });
+    });
+  },
+  emit(input) {
+    if (pending.size > 0) throw new PluginProtocolError("concurrent plugin context calls are not allowed");
+    const requestId = nextRequestId++;
+    const values: unknown[] = Array.isArray(input) ? input : [input];
+    if (values.length === 0 || !values.every(isEventInput)) {
+      throw new PluginProtocolError("invalid derived event");
+    }
+    const events = values as EventInput[];
+    return new Promise<void>((resolve) => {
+      pending.set(requestId, { type: "emit", resolve });
+      send({ type: "emit.request", requestId, events });
     });
   },
 };
@@ -110,6 +125,12 @@ process.on("message", async (raw: HostToPluginMessage) => {
       if (request.type !== "history") throw new PluginProtocolError("unexpected history response");
       pending.delete(raw.requestId);
       request.resolve(raw.page);
+      return;
+    }
+    if (raw.type === "emit.result") {
+      if (request.type !== "emit") throw new PluginProtocolError("unexpected emit response");
+      pending.delete(raw.requestId);
+      request.resolve();
       return;
     }
     if (raw.type !== "step.result") throw new PluginProtocolError("unknown host message");

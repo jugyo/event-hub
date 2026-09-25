@@ -1,8 +1,8 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Json, Logger, WorkflowContext } from "@jugyo/duex";
-import type { HistoryPage, HistoryQuery } from "../../storage/event-store.ts";
-import type { HostToPluginMessage, PluginErrorCode, PluginToHostMessage } from "./contract.ts";
+import type { EventInput, HistoryPage, HistoryQuery } from "../../storage/event-store.ts";
+import { isEventInput, type HostToPluginMessage, type PluginErrorCode, type PluginToHostMessage } from "./contract.ts";
 
 export type PluginProcessErrorCode =
   PluginErrorCode | "PLUGIN_PROCESS_EXITED" | "PLUGIN_PROCESS_DISCONNECTED" | "PLUGIN_TIMEOUT";
@@ -32,6 +32,7 @@ export interface RunPluginProcessOptions {
   timeoutMs?: number;
   onSpawn?: (child: ChildProcess) => void;
   queryHistory?: (query: HistoryQuery) => HistoryPage;
+  emitEvents?: (events: EventInput[]) => void;
   logger?: Logger;
 }
 
@@ -112,6 +113,15 @@ function parsePluginMessage(raw: unknown): PluginToHostMessage | null {
   }
   if (raw.type === "history.request") {
     return hasOnlyKeys(raw, ["type", "requestId", "query"]) && isRequestId(raw.requestId) && isHistoryQuery(raw.query)
+      ? (raw as unknown as PluginToHostMessage)
+      : null;
+  }
+  if (raw.type === "emit.request") {
+    return hasOnlyKeys(raw, ["type", "requestId", "events"]) &&
+      isRequestId(raw.requestId) &&
+      Array.isArray(raw.events) &&
+      raw.events.length > 0 &&
+      raw.events.every(isEventInput)
       ? (raw as unknown as PluginToHostMessage)
       : null;
   }
@@ -251,6 +261,18 @@ function drivePlugin(child: ChildProcess, options: RunPluginProcessOptions): Pro
             hasMore: page.nextCursor !== null,
           });
           send({ type: "history.result", requestId: message.requestId, page });
+          pending.delete(message.requestId);
+        });
+        chain.catch(() => protocolViolation());
+        return;
+      }
+      if (message.type === "emit.request") {
+        if (seen.has(message.requestId) || pending.size > 0 || !options.emitEvents) return protocolViolation();
+        seen.add(message.requestId);
+        pending.add(message.requestId);
+        chain = chain.then(() => {
+          options.emitEvents!(message.events);
+          send({ type: "emit.result", requestId: message.requestId });
           pending.delete(message.requestId);
         });
         chain.catch(() => protocolViolation());

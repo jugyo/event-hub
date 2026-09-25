@@ -314,3 +314,209 @@ export async function execute(ctx, input) {
     before,
   );
 });
+
+test("派生イベントを delivery 完了とアトミックに保存し、別 Consumer へ配信できる", async (t) => {
+  const store = preparedStore();
+  t.after(() => store.close());
+  store.registerConsumer("consumer-c", NOW.toISOString());
+  const entry = await plugin(
+    t,
+    `
+export async function execute(ctx, input) {
+  await ctx.emit([
+    {
+      id: "derived-1",
+      externalId: input.event.id + ":article",
+      type: "article.extracted",
+      schemaVersion: 1,
+      occurredAt: input.event.occurredAt,
+      observedAt: ${JSON.stringify(NOW.toISOString())},
+      payload: { markdown: "# Article" },
+    },
+    {
+      id: "derived-2",
+      externalId: input.event.id + ":summary",
+      type: "article.summarized",
+      schemaVersion: 1,
+      occurredAt: input.event.occurredAt,
+      observedAt: ${JSON.stringify(NOW.toISOString())},
+      payload: { text: "Summary" },
+    },
+  ]);
+  return { emitted: 2 };
+}`,
+  );
+  const delivery = store.matchConsumerEvents("consumer-a", ["example.changed"], 100, NOW.toISOString())[0]!;
+
+  assert.deepEqual(
+    await deliverConsumerEvent({
+      consumerId: "consumer-a",
+      event: delivery.event,
+      config: null,
+      store,
+      context,
+      entry,
+      env: {},
+      secrets,
+      now: () => NOW,
+    }),
+    { emitted: 2 },
+  );
+
+  assert.equal(store.getDelivery("consumer-a", "new-event")?.status, "completed");
+  assert.deepEqual(
+    store
+      .queryHistory({
+        from: new Date(NOW.getTime() - 2 * DAY).toISOString(),
+        to: new Date(NOW.getTime() + 1).toISOString(),
+        sourceIds: ["consumer-a"],
+      })
+      .events.map(({ id, sourceId, type }) => ({ id, sourceId, type })),
+    [
+      { id: "derived-1", sourceId: "consumer-a", type: "article.extracted" },
+      { id: "derived-2", sourceId: "consumer-a", type: "article.summarized" },
+    ],
+  );
+  assert.deepEqual(
+    store.matchConsumerEvents("consumer-c", ["article.extracted"], 100, NOW.toISOString()).map(({ event }) => event.id),
+    ["derived-1"],
+  );
+});
+
+test("失敗した試行の派生イベントを保存せず、再試行後に一度だけ保存する", async (t) => {
+  const store = preparedStore();
+  t.after(() => store.close());
+  const marker = join(await mkdtemp(join(tmpdir(), "event-hub-emission-retry-")), "attempted");
+  t.after(() => rm(join(marker, ".."), { recursive: true, force: true }));
+  const entry = await plugin(
+    t,
+    `
+import { access, writeFile } from "node:fs/promises";
+export async function execute(ctx, input) {
+  await ctx.emit({
+    id: "derived-retry",
+    externalId: input.event.id + ":derived",
+    type: "example.derived",
+    schemaVersion: 1,
+    occurredAt: input.event.occurredAt,
+    observedAt: ${JSON.stringify(NOW.toISOString())},
+    payload: { ok: true },
+  });
+  return ctx.run("finish", async () => {
+    try { await access(${JSON.stringify(marker)}); }
+    catch { await writeFile(${JSON.stringify(marker)}, "once"); throw new Error("temporary"); }
+    return { ok: true };
+  });
+}`,
+  );
+  const delivery = store.matchConsumerEvents("consumer-a", ["example.changed"], 100, NOW.toISOString())[0]!;
+  const options = {
+    consumerId: "consumer-a",
+    event: delivery.event,
+    config: null,
+    store,
+    context,
+    entry,
+    env: {},
+    secrets,
+    retry: { maxAttempts: 2, initialDelayMs: 1 },
+  };
+
+  await assert.rejects(deliverConsumerEvent({ ...options, now: () => NOW }));
+  assert.equal(
+    store
+      .queryHistory({
+        from: new Date(NOW.getTime() - 2 * DAY).toISOString(),
+        to: new Date(NOW.getTime() + 1).toISOString(),
+      })
+      .events.some(({ id }) => id === "derived-retry"),
+    false,
+  );
+
+  const retryAt = new Date(NOW.getTime() + 1);
+  await deliverConsumerEvent({ ...options, now: () => retryAt });
+  assert.equal(
+    store
+      .queryHistory({
+        from: new Date(NOW.getTime() - 2 * DAY).toISOString(),
+        to: new Date(NOW.getTime() + 2).toISOString(),
+      })
+      .events.filter(({ id }) => id === "derived-retry").length,
+    1,
+  );
+});
+
+test("IPC serialization 前に有限 JSON でない派生イベントを拒否し、delivery も完了しない", async (t) => {
+  const store = preparedStore();
+  t.after(() => store.close());
+  const entry = await plugin(
+    t,
+    `export async function execute(ctx) {
+      await ctx.emit({ id: "invalid", externalId: "invalid", type: "example.invalid", schemaVersion: 1,
+        occurredAt: ${JSON.stringify(NOW.toISOString())}, observedAt: ${JSON.stringify(NOW.toISOString())},
+        payload: { nan: NaN, missing: undefined } });
+      return null;
+    }`,
+  );
+  const delivery = store.matchConsumerEvents("consumer-a", ["example.changed"], 100, NOW.toISOString())[0]!;
+
+  await assert.rejects(
+    deliverConsumerEvent({
+      consumerId: "consumer-a",
+      event: delivery.event,
+      config: null,
+      store,
+      context,
+      entry,
+      env: {},
+      secrets,
+      now: () => NOW,
+    }),
+    { code: "PLUGIN_PROTOCOL_VIOLATION" },
+  );
+  assert.equal(store.getDelivery("consumer-a", "new-event")?.status, "failed");
+  assert.equal(
+    store.queryHistory({ from: NOW.toISOString(), to: new Date(NOW.getTime() + 1).toISOString() }).events.length,
+    0,
+  );
+});
+
+test("派生イベントの保存失敗時に入力 delivery を完了しない", async (t) => {
+  const store = preparedStore();
+  t.after(() => store.close());
+  const entry = await plugin(
+    t,
+    `export async function execute(ctx, input) {
+      await ctx.emit({ id: input.event.id, externalId: "different-external-id", type: "example.derived",
+        schemaVersion: 1, occurredAt: input.event.occurredAt,
+        observedAt: ${JSON.stringify(NOW.toISOString())}, payload: {} });
+      return null;
+    }`,
+  );
+  const delivery = store.matchConsumerEvents("consumer-a", ["example.changed"], 100, NOW.toISOString())[0]!;
+
+  await assert.rejects(
+    deliverConsumerEvent({
+      consumerId: "consumer-a",
+      event: delivery.event,
+      config: null,
+      store,
+      context,
+      entry,
+      env: {},
+      secrets,
+      now: () => NOW,
+    }),
+    /UNIQUE constraint failed/,
+  );
+  assert.equal(store.getDelivery("consumer-a", "new-event")?.status, "retry_wait");
+  assert.equal(
+    store
+      .queryHistory({
+        from: new Date(NOW.getTime() - 2 * DAY).toISOString(),
+        to: new Date(NOW.getTime() + 1).toISOString(),
+      })
+      .events.filter(({ id }) => id === "new-event").length,
+    1,
+  );
+});
