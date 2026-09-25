@@ -34,6 +34,17 @@ event-hub status
 event-hub status --json
 ```
 
+Start the read-only Web UI for the current project at `http://127.0.0.1:3000`:
+
+```console
+event-hub web
+event-hub web --root "/path/to/project" --port 3001
+```
+
+The server runs in the foreground, listens only on IPv4 loopback, and serves the UI and `/api/v1`
+from the same origin. Press `Ctrl-C` to stop it. The production command serves packaged static files;
+it does not start the Vite development server.
+
 Retry or cancel an invocation with:
 
 ```console

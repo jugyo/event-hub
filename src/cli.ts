@@ -12,6 +12,7 @@ import { registerLaunchAgent, unregisterLaunchAgent } from "./launch-agent.ts";
 import { projectStatus, tickProject, updateInvocation } from "./operations.ts";
 import { JsonLogger } from "@jugyo/duex";
 import { TextLogger } from "./text-logger.ts";
+import { serveWeb } from "./web-server.ts";
 
 interface CliDependencies {
   projectRoot: string;
@@ -26,6 +27,12 @@ interface CliDependencies {
   launchctl?: string;
   uid?: number;
   runLaunchctl?(path: string, args: string[]): Promise<number>;
+  serveWeb?(options: {
+    projectRoot: string;
+    port: number;
+    signal: AbortSignal;
+    onStarted(url: string): void;
+  }): Promise<string>;
 }
 
 async function readSecretInput(): Promise<string> {
@@ -75,6 +82,7 @@ function usage(error: (message: string) => void): number {
   error("Usage: event-hub init [directory]");
   error("          event-hub tick [--root <directory>] [--max-runs <n>] [--debug] [--json]");
   error("          event-hub status [--root <directory>] [--json]");
+  error("          event-hub web [--root <directory>] [--port <number>]");
   error("          event-hub invocation retry|cancel <id> [--root <directory>] [--json]");
   error("          event-hub launch-agent register|unregister [--root <directory>] [--debug]");
   error("          event-hub secret add|update <reference>");
@@ -84,14 +92,20 @@ function usage(error: (message: string) => void): number {
 }
 
 export async function run(argv = process.argv.slice(2), dependencies = defaultDependencies()): Promise<number> {
+  const portIndex = argv.indexOf("--port");
+  if (portIndex !== -1) {
+    const value = argv[portIndex + 1];
+    const port = Number(value);
+    if (!value || !Number.isInteger(port) || port < 1 || port > 65_535) {
+      dependencies.error("Invalid port: expected an integer from 1 to 65535");
+      return 2;
+    }
+  }
   const parsed = parseOptions(argv);
   if (!parsed) return usage(dependencies.error);
-  const { positionals, root, json, debug, maxRuns } = parsed;
+  const { positionals, root, json, debug, maxRuns, port } = parsed;
   const [command, subject, name, ...extra] = positionals;
   const projectRoot = resolve(root ?? dependencies.projectRoot);
-  const backend =
-    dependencies.backend ?? dependencies.createBackend?.(projectRoot) ?? new KeychainSecretBackend({ projectRoot });
-  const secrets = new SecretService(projectRoot, backend);
 
   try {
     if (command === "init" && name === undefined && extra.length === 0) {
@@ -99,6 +113,30 @@ export async function run(argv = process.argv.slice(2), dependencies = defaultDe
       dependencies.out(`Initialized: ${result.projectRoot}`);
       return 0;
     }
+    if (command === "web" && subject === undefined && !json && !debug && maxRuns === undefined) {
+      const controller = new AbortController();
+      const stop = (): void => controller.abort();
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+      try {
+        const serving = dependencies.serveWeb ?? serveWeb;
+        const urlPromise = serving({
+          projectRoot,
+          port: port ?? 3000,
+          signal: controller.signal,
+          onStarted: (url) => dependencies.out(`Web UI: ${url}`),
+        });
+        await urlPromise;
+      } finally {
+        process.off("SIGINT", stop);
+        process.off("SIGTERM", stop);
+      }
+      return 0;
+    }
+    if (port !== undefined) return usage(dependencies.error);
+    const backend =
+      dependencies.backend ?? dependencies.createBackend?.(projectRoot) ?? new KeychainSecretBackend({ projectRoot });
+    const secrets = new SecretService(projectRoot, backend);
     if (command === "tick" && subject === undefined) {
       // `--json` keeps stdout parseable, so its diagnostics stay JSON Lines on stderr.
       const level = debug ? "debug" : "info";
@@ -189,10 +227,12 @@ function parseOptions(argv: string[]): {
   json: boolean;
   debug: boolean;
   maxRuns?: number;
+  port?: number;
 } | null {
   const positionals: string[] = [];
   let root: string | undefined;
   let maxRuns: number | undefined;
+  let port: number | undefined;
   let json = false;
   let debug = false;
   for (let index = 0; index < argv.length; index += 1) {
@@ -216,10 +256,16 @@ function parseOptions(argv: string[]): {
       if (!raw || !Number.isInteger(maxRuns) || maxRuns < 0) return null;
       continue;
     }
+    if (value === "--port") {
+      const raw = argv[++index];
+      port = Number(raw);
+      if (!raw || !Number.isInteger(port) || port < 1 || port > 65_535) return null;
+      continue;
+    }
     if (value.startsWith("--")) return null;
     positionals.push(value);
   }
-  return { positionals, root, json, debug, maxRuns };
+  return { positionals, root, json, debug, maxRuns, port };
 }
 
 if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(resolve(process.argv[1]))) {

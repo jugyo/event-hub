@@ -32,7 +32,7 @@
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "build": "npm run clean && tsc -p tsconfig.build.json && node -e \"require('node:fs').cpSync('src/web', 'dist/src/web', { recursive: true })\"",
     "ci": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run test:pack && npm run build",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

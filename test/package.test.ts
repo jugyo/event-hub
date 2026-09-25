@@ -56,6 +56,7 @@ test("installs the packed package and initializes a directory containing spaces"
 
     const packageFiles = run("tar", ["-tf", tarball], temporaryRoot);
     assert.equal(packageFiles.status, 0, packageFiles.stderr);
+    assert.match(packageFiles.stdout, /package\/dist\/src\/web\/index\.html/u);
     // Resolve @jugyo/duex distribution files from the dependency package, not the application tarball.
     assert.doesNotMatch(packageFiles.stdout, /package\/dist\/src\/mini-restate\.js/);
     assert.doesNotMatch(packageFiles.stdout, /package\/dist\/mini-restate\//);
