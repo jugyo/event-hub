@@ -5,11 +5,21 @@ import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CONFIG_FILENAME } from "./init.ts";
-import { readProjectStatus, type PluginStatus } from "./operations.ts";
+import {
+  readProjectEvents,
+  readProjectStatus,
+  type PluginStatus,
+  type ProjectEvent,
+  type ProjectEventQuery,
+} from "./operations.ts";
 
 const LOOPBACK_HOST = "127.0.0.1";
 const DEFAULT_STATIC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "web");
 const EVENT_HUB_VERSION = "0.3.0";
+const PLUGIN_DETAIL_PREFIX = "/api/v1/plugins/";
+const EVENT_QUERY_FIELDS = new Set(["sourceId", "limit"]);
+const DEFAULT_EVENT_LIMIT = 20;
+const MAX_EVENT_LIMIT = 100;
 
 const contentTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -26,6 +36,7 @@ export interface WebServerOptions {
   staticRoot?: string;
   onStarted?(url: string): void;
   statusProvider?(projectRoot: string): Promise<PluginStatus[]>;
+  eventsProvider?(projectRoot: string, query: ProjectEventQuery): Promise<ProjectEvent[]>;
 }
 
 function sendJson(response: import("node:http").ServerResponse, status: number, body: unknown): void {
@@ -59,8 +70,35 @@ async function validateProjectRoot(projectRoot: string): Promise<void> {
   }
 }
 
-function apiNotFound(response: import("node:http").ServerResponse): void {
-  sendJson(response, 404, { error: { code: "NOT_FOUND", message: "API route not found", details: null } });
+function apiNotFound(response: import("node:http").ServerResponse, message = "API route not found"): void {
+  sendJson(response, 404, { error: { code: "NOT_FOUND", message, details: null } });
+}
+
+function invalidQuery(response: import("node:http").ServerResponse, fields: string[]): void {
+  sendJson(response, 400, { error: { code: "INVALID_QUERY", message: "Invalid query", details: { fields } } });
+}
+
+/** Returns the enumerated field names that make an event query ambiguous or out of range, newest-first paging aside. */
+function invalidEventFields(params: URLSearchParams): string[] {
+  const fields = new Set<string>();
+  for (const key of params.keys()) {
+    if (!EVENT_QUERY_FIELDS.has(key) || params.getAll(key).length > 1) fields.add(key);
+  }
+  if (!params.get("sourceId")) fields.add("sourceId");
+  const limit = params.get("limit");
+  if (limit !== null && !(/^\d+$/u.test(limit) && Number(limit) >= 1 && Number(limit) <= MAX_EVENT_LIMIT)) {
+    fields.add("limit");
+  }
+  return [...fields];
+}
+
+function decodePluginId(pathname: string): string | null {
+  if (!pathname.startsWith(PLUGIN_DETAIL_PREFIX)) return null;
+  try {
+    return decodeURIComponent(pathname.slice(PLUGIN_DETAIL_PREFIX.length)) || null;
+  } catch {
+    return null;
+  }
 }
 
 function publicPlugin(status: PluginStatus) {
@@ -134,6 +172,7 @@ export async function startWebServer(options: WebServerOptions): Promise<Running
   const startedAt = new Date().toISOString();
   const projectName = options.projectRoot.split(sep).filter(Boolean).at(-1) ?? "event-hub";
   const statusProvider = options.statusProvider ?? readProjectStatus;
+  const eventsProvider = options.eventsProvider ?? readProjectEvents;
 
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
@@ -146,22 +185,50 @@ export async function startWebServer(options: WebServerOptions): Promise<Running
         );
         return;
       }
-      if (pathname !== "/api/v1/dashboard" && pathname !== "/api/v1/plugins") {
-        apiNotFound(response);
-        return;
-      }
-      if ([...url.searchParams].length > 0) {
-        sendJson(response, 400, {
-          error: {
-            code: "INVALID_QUERY",
-            message: "Invalid query",
-            details: { fields: [...new Set(url.searchParams.keys())] },
-          },
-        });
-        return;
-      }
       try {
-        const plugins = (await statusProvider(options.projectRoot)).map(publicPlugin);
+        if (pathname === "/api/v1/events") {
+          const invalid = invalidEventFields(url.searchParams);
+          if (invalid.length > 0) {
+            invalidQuery(response, invalid);
+            return;
+          }
+          const limit = Number(url.searchParams.get("limit") ?? DEFAULT_EVENT_LIMIT);
+          const events = await eventsProvider(options.projectRoot, {
+            sourceId: url.searchParams.get("sourceId")!,
+            limit,
+          });
+          // Paging is not part of this endpoint yet, so the contract's cursor is always absent.
+          sendJson(response, 200, { events, page: { nextCursor: null, limit } });
+          return;
+        }
+        const pluginId = decodePluginId(pathname);
+        if (pathname !== "/api/v1/dashboard" && pathname !== "/api/v1/plugins" && pluginId === null) {
+          apiNotFound(response);
+          return;
+        }
+        if ([...url.searchParams].length > 0) {
+          invalidQuery(response, [...new Set(url.searchParams.keys())]);
+          return;
+        }
+        const statuses = await statusProvider(options.projectRoot);
+        if (pluginId !== null) {
+          const status = statuses.find((candidate) => candidate.id === pluginId);
+          if (!status) {
+            apiNotFound(response, "Plugin not found");
+            return;
+          }
+          sendJson(response, 200, {
+            plugin: {
+              ...publicPlugin(status),
+              pendingWorkBreakdown: {
+                pending: status.pendingBreakdown.pending,
+                retry_wait: status.pendingBreakdown.retryWait,
+              },
+            },
+          });
+          return;
+        }
+        const plugins = statuses.map(publicPlugin);
         if (pathname === "/api/v1/plugins") {
           sendJson(response, 200, { plugins });
           return;

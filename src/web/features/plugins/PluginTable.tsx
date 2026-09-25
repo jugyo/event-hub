@@ -2,6 +2,7 @@ import {
   Alert,
   Box,
   Chip,
+  Link,
   Paper,
   Stack,
   Table,
@@ -12,10 +13,11 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
+import { Link as RouterLink } from "react-router";
 import type { PluginDto } from "../../api/client.ts";
 
 function time(value: string | null | undefined): string {
-  return value ? new Date(value).toLocaleString() : "未実行";
+  return value ? new Date(value).toLocaleString() : "Not run";
 }
 
 export function PluginTable({ title, plugins }: { title: string; plugins: PluginDto[] }) {
@@ -26,17 +28,17 @@ export function PluginTable({ title, plugins }: { title: string; plugins: Plugin
       </Typography>
       {plugins.length === 0 ? (
         <Paper variant="outlined" sx={{ p: 3 }}>
-          <Typography>登録済みの {title} はありません。</Typography>
+          <Typography>No {title.toLowerCase()} found.</Typography>
         </Paper>
       ) : (
         <TableContainer component={Paper} variant="outlined">
-          <Table aria-label={`${title} の稼働状況`} sx={{ minWidth: 720 }}>
+          <Table aria-label={`${title} status`} sx={{ minWidth: 720 }}>
             <TableHead>
               <TableRow>
                 <TableCell>Plugin</TableCell>
                 <TableCell>Load state</TableCell>
-                <TableCell>最終実行</TableCell>
-                <TableCell>結果</TableCell>
+                <TableCell>Last run</TableCell>
+                <TableCell>Result</TableCell>
                 <TableCell align="right">Pending work</TableCell>
                 <TableCell>Failure / diagnostics</TableCell>
               </TableRow>
@@ -45,7 +47,13 @@ export function PluginTable({ title, plugins }: { title: string; plugins: Plugin
               {plugins.map((plugin) => (
                 <TableRow key={plugin.id}>
                   <TableCell component="th" scope="row">
-                    <strong>{plugin.id}</strong>
+                    {plugin.kind === "source" ? (
+                      <Link component={RouterLink} to={`/sources/${encodeURIComponent(plugin.id)}`} fontWeight={700}>
+                        {plugin.id}
+                      </Link>
+                    ) : (
+                      <strong>{plugin.id}</strong>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Chip
@@ -71,7 +79,7 @@ export function PluginTable({ title, plugins }: { title: string; plugins: Plugin
                           {item.code}: {item.message}
                         </Alert>
                       ))}
-                      {!plugin.failure && plugin.diagnostics.length === 0 && <Box component="span">なし</Box>}
+                      {!plugin.failure && plugin.diagnostics.length === 0 && <Box component="span">None</Box>}
                     </Stack>
                   </TableCell>
                 </TableRow>

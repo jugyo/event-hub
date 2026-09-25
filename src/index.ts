@@ -56,8 +56,15 @@ export type {
 } from "./scheduling.ts";
 export { launchAgentLabel, launchAgentPlist, registerLaunchAgent, unregisterLaunchAgent } from "./launch-agent.ts";
 export type { LaunchAgentOptions, LaunchAgentResult } from "./launch-agent.ts";
-export { openProjectRuntime, projectStatus, readProjectStatus, tickProject, updateInvocation } from "./operations.ts";
-export type { PluginStatus, ProjectRuntime } from "./operations.ts";
+export {
+  openProjectRuntime,
+  projectStatus,
+  readProjectEvents,
+  readProjectStatus,
+  tickProject,
+  updateInvocation,
+} from "./operations.ts";
+export type { PendingBreakdown, PluginStatus, ProjectEvent, ProjectEventQuery, ProjectRuntime } from "./operations.ts";
 export { createPluginWorkflows } from "./workflows.ts";
 export type { PluginWorkflowOptions } from "./workflows.ts";
 

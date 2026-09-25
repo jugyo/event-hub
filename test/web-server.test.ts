@@ -11,6 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import { run } from "../src/cli.ts";
 import { initProject } from "../src/init.ts";
 import { openProjectRuntime, readProjectStatus } from "../src/operations.ts";
+import { EventStore } from "../src/storage/event-store.ts";
 import { serveWeb, startWebServer, WebServerError } from "../src/web-server.ts";
 
 const staticRoot = new URL("../src/web", import.meta.url).pathname;
@@ -58,6 +59,7 @@ test("serves a secret-free read-only dashboard API", async (t) => {
         lastRunFinishedAt: "2026-09-25T00:00:00.000Z",
         lastInvocationId: "internal-invocation",
         pending: 2,
+        pendingBreakdown: { pending: 1, retryWait: 1 },
         failure: "sentinel-secret-value",
         lastRunStatus: "failed",
         diagnostics: [],
@@ -266,4 +268,165 @@ test("serveWeb closes the listener when its signal is aborted", async (t) => {
     },
   });
   await assert.rejects(fetch(url));
+});
+
+test("serves plugin details with a pending work breakdown and 404s unknown plugins", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub plugin detail "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initProject(root);
+  const server = await startWebServer({
+    projectRoot: root,
+    port: 0,
+    staticRoot,
+    statusProvider: async () => [
+      {
+        id: "source-a",
+        kind: "source",
+        state: "failed",
+        lastRunAt: "2026-09-25T00:00:00.000Z",
+        lastRunStartedAt: "2026-09-24T23:59:00.000Z",
+        lastRunFinishedAt: "2026-09-25T00:00:00.000Z",
+        lastInvocationId: "internal-invocation",
+        pending: 3,
+        pendingBreakdown: { pending: 2, retryWait: 1 },
+        failure: "sentinel-secret-value",
+        lastRunStatus: "failed",
+        diagnostics: [],
+        displayKind: "source",
+        loadState: "loaded",
+      },
+    ],
+  });
+  t.after(() => server.close());
+
+  const response = await fetch(`${server.url}/api/v1/plugins/source-a`);
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as {
+    plugin: { id: string; pendingWork: number; pendingWorkBreakdown: Record<string, number>; failure: unknown };
+  };
+  assert.equal(body.plugin.id, "source-a");
+  assert.equal(body.plugin.pendingWork, 3);
+  assert.deepEqual(body.plugin.pendingWorkBreakdown, { pending: 2, retry_wait: 1 });
+  assert.deepEqual(body.plugin.failure, {
+    code: "PLUGIN_EXECUTION_FAILED",
+    message: "The plugin did not complete successfully",
+    occurredAt: "2026-09-25T00:00:00.000Z",
+  });
+  assert.doesNotMatch(JSON.stringify(body), /sentinel-secret-value|internal-invocation/u);
+
+  const missing = await fetch(`${server.url}/api/v1/plugins/unknown-source`);
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), {
+    error: { code: "NOT_FOUND", message: "Plugin not found", details: null },
+  });
+
+  const query = await fetch(`${server.url}/api/v1/plugins/source-a?unknown=true`);
+  assert.equal(query.status, 400);
+  assert.equal(((await query.json()) as { error: { code: string } }).error.code, "INVALID_QUERY");
+
+  const post = await fetch(`${server.url}/api/v1/plugins/source-a`, { method: "POST" });
+  assert.equal(post.status, 405);
+});
+
+test("serves stored events newest first and validates the event query", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub events api "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initProject(root);
+  const store = new EventStore({ path: join(root, ".event-hub", "events.sqlite") });
+  store.migrate();
+  const event = (id: string, externalId: string, occurredAt: string) => ({
+    id,
+    externalId,
+    type: "example.changed",
+    schemaVersion: 1,
+    occurredAt,
+    observedAt: "2026-09-25T00:00:00.000Z",
+    payload: { note: "visible" },
+  });
+  store.appendSourceBatch({
+    sourceId: "source-a",
+    expectedCursor: null,
+    nextCursor: null,
+    updatedAt: "2026-09-25T00:00:00.000Z",
+    events: [
+      event("evt-oldest", "1", "2026-09-24T00:00:00.000Z"),
+      event("evt-b", "2", "2026-09-24T12:00:00.000Z"),
+      event("evt-a", "3", "2026-09-24T12:00:00.000Z"),
+    ],
+  });
+  store.appendSourceBatch({
+    sourceId: "source-b",
+    expectedCursor: null,
+    nextCursor: null,
+    updatedAt: "2026-09-25T00:00:00.000Z",
+    events: [event("evt-other", "4", "2026-09-24T23:00:00.000Z")],
+  });
+  store.close();
+
+  const server = await startWebServer({ projectRoot: root, port: 0, staticRoot });
+  t.after(() => server.close());
+
+  const response = await fetch(`${server.url}/api/v1/events?sourceId=source-a`);
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as {
+    events: Array<{ id: string; sourceId: string; occurredAt: string }>;
+    page: { nextCursor: string | null; limit: number };
+  };
+  assert.deepEqual(
+    body.events.map(({ id }) => id),
+    ["evt-b", "evt-a", "evt-oldest"],
+  );
+  assert.deepEqual(body.page, { nextCursor: null, limit: 20 });
+  assert.equal(
+    body.events.every(({ sourceId }) => sourceId === "source-a"),
+    true,
+  );
+
+  const limited = (await (await fetch(`${server.url}/api/v1/events?sourceId=source-a&limit=1`)).json()) as {
+    events: Array<{ id: string }>;
+    page: { limit: number };
+  };
+  assert.deepEqual(
+    limited.events.map(({ id }) => id),
+    ["evt-b"],
+  );
+  assert.equal(limited.page.limit, 1);
+
+  const empty = (await (await fetch(`${server.url}/api/v1/events?sourceId=unknown-source`)).json()) as {
+    events: unknown[];
+  };
+  assert.deepEqual(empty.events, []);
+
+  for (const query of [
+    "",
+    "?limit=20",
+    "?sourceId=source-a&limit=0",
+    "?sourceId=source-a&limit=101",
+    "?sourceId=source-a&limit=abc",
+    "?sourceId=source-a&type=example.changed",
+    "?sourceId=source-a&sourceId=source-b",
+  ]) {
+    const invalid = await fetch(`${server.url}/api/v1/events${query}`);
+    assert.equal(invalid.status, 400, query);
+    const error = (await invalid.json()) as { error: { code: string; message: string; details: { fields: string[] } } };
+    assert.equal(error.error.code, "INVALID_QUERY");
+    assert.equal(error.error.message, "Invalid query");
+    assert.ok(error.error.details.fields.length > 0, query);
+  }
+
+  const post = await fetch(`${server.url}/api/v1/events?sourceId=source-a`, { method: "POST" });
+  assert.equal(post.status, 405);
+});
+
+test("reads event history without creating the event store", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub events readonly "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initProject(root);
+  const server = await startWebServer({ projectRoot: root, port: 0, staticRoot });
+  t.after(() => server.close());
+
+  const response = await fetch(`${server.url}/api/v1/events?sourceId=source-a`);
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()) as unknown, { events: [], page: { nextCursor: null, limit: 20 } });
+  assert.equal(existsSync(join(root, ".event-hub", "events.sqlite")), false);
 });

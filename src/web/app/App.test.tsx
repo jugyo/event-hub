@@ -48,9 +48,9 @@ describe("dashboard", () => {
     network.use(http.get("*/api/v1/dashboard", () => HttpResponse.json(dashboard)));
     renderApp();
     expect(await screen.findByRole("heading", { name: "demo" })).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "Sources の稼働状況" })).toBeInTheDocument();
-    expect(screen.getByText("登録済みの Consumers はありません。")).toBeInTheDocument();
-    expect(getComputedStyle(screen.getByRole("table", { name: "Sources の稼働状況" }).parentElement!).overflowX).toBe(
+    expect(screen.getByRole("table", { name: "Sources status" })).toBeInTheDocument();
+    expect(screen.getByText("No consumers found.")).toBeInTheDocument();
+    expect(getComputedStyle(screen.getByRole("table", { name: "Sources status" }).parentElement!).overflowX).toBe(
       "auto",
     );
   });
@@ -75,7 +75,7 @@ describe("dashboard", () => {
       }),
     );
     renderApp();
-    expect(screen.getByRole("status", { name: "稼働状況を読み込み中" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Loading status" })).toBeInTheDocument();
   });
 
   it("polls while visible, pauses while hidden, and refetches immediately when visible again", async () => {
@@ -117,10 +117,10 @@ describe("dashboard", () => {
       </QueryClientProvider>,
     );
     expect(screen.getByRole("heading", { name: "demo" })).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("更新中");
+    expect(screen.getByRole("status")).toHaveTextContent("Updating");
     await waitFor(() => expect(resolveFetch).toBeTypeOf("function"));
     resolveFetch(HttpResponse.json({}, { status: 400 }));
-    expect(await screen.findByText("更新に失敗しました。直近のデータを表示しています。")).toBeInTheDocument();
+    expect(await screen.findByText("The update failed. Showing the most recent data.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "demo" })).toBeInTheDocument();
   });
 
@@ -166,8 +166,8 @@ describe("dashboard", () => {
       }),
     );
     renderApp();
-    expect(await screen.findByText("稼働状況を取得できませんでした。")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "再試行" }));
+    expect(await screen.findByText("Status could not be loaded.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(requests).toBe(2);
   });
 });

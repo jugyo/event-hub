@@ -16,7 +16,7 @@ import { discoverAndSyncPlugins, discoverPlugins, type PluginDiagnostic } from "
 import type { SecretProvider } from "./plugins/process/executor.ts";
 import type { NormalizedPluginManifest } from "./plugins/manifest.ts";
 import { enqueueConsumerDeliveries, syncPluginSchedules } from "./scheduling.ts";
-import { EventStore, type PluginRegistration } from "./storage/event-store.ts";
+import { EventStore, type Json, type PluginRegistration } from "./storage/event-store.ts";
 import { CONFIG_FILENAME } from "./init.ts";
 
 interface ProjectConfig {
@@ -33,6 +33,12 @@ export interface ProjectRuntime {
   close(): void;
 }
 
+/** Pending work split into the two states the Web UI reports separately. */
+export interface PendingBreakdown {
+  pending: number;
+  retryWait: number;
+}
+
 export interface PluginStatus {
   id: string;
   kind: "source" | "consumer" | "invalid";
@@ -42,6 +48,7 @@ export interface PluginStatus {
   lastRunFinishedAt: string | null;
   lastInvocationId: string | null;
   pending: number;
+  pendingBreakdown: PendingBreakdown;
   failure: string | null;
   lastRunStatus: "running" | "completed" | "failed" | null;
   diagnostics: Array<{ code: string; message: string; occurredAt: string }>;
@@ -186,6 +193,11 @@ export async function projectStatus(projectRoot: string, secrets: SecretProvider
       // delivery state; a later successful delivery must not hide an earlier failed one.
       const events = manifest.kind === "consumer" && manifest.trigger.type === "events";
       const failedDelivery = events ? project.eventStore.getLatestFailedDelivery(plugin.id) : null;
+      const deliveries = events ? project.eventStore.listPendingDeliveries(plugin.id) : [];
+      const breakdown = pendingWork(plugin.kind, events, own, {
+        pending: deliveries.filter(({ status }) => status === "pending").length,
+        retryWait: deliveries.filter(({ status }) => status === "retry_wait").length,
+      });
       return {
         id: plugin.id,
         kind: plugin.kind,
@@ -194,12 +206,8 @@ export async function projectStatus(projectRoot: string, secrets: SecretProvider
         lastRunStartedAt: last ? new Date(last.createdAt).toISOString() : null,
         lastRunFinishedAt: last && last.status !== "running" ? new Date(last.updatedAt).toISOString() : null,
         lastInvocationId: last?.id ?? null,
-        pending: pendingWork(
-          plugin.kind,
-          events,
-          own,
-          events ? project.eventStore.listPendingDeliveries(plugin.id).length : 0,
-        ),
+        pending: totalPending(breakdown),
+        pendingBreakdown: breakdown,
         failure: events
           ? failedDelivery && `event ${failedDelivery.event.id} ${failedDelivery.status}: ${failedDelivery.errorCode}`
           : (failed?.error?.message ?? null),
@@ -220,6 +228,7 @@ export async function projectStatus(projectRoot: string, secrets: SecretProvider
         lastRunFinishedAt: null,
         lastInvocationId: null,
         pending: 0,
+        pendingBreakdown: { pending: 0, retryWait: 0 },
         failure: `${diagnostic.code}: ${diagnostic.message}`,
         lastRunStatus: null,
         diagnostics: [
@@ -268,19 +277,21 @@ function readonlyInvocations(path: string): ReadonlyInvocation[] {
   }
 }
 
-function readonlyDeliveryState(path: string, consumerId: string): { pending: number; failed: boolean } {
-  if (!existsSync(path)) return { pending: 0, failed: false };
+function readonlyDeliveryState(path: string, consumerId: string): PendingBreakdown & { failed: boolean } {
+  if (!existsSync(path)) return { pending: 0, retryWait: 0, failed: false };
   const database = new DatabaseSync(path, { readOnly: true });
   try {
-    const pending = database
+    const counts = database
       .prepare(
-        "SELECT COUNT(*) AS count FROM consumer_deliveries WHERE consumer_id = ? AND status IN ('pending', 'retry_wait')",
+        `SELECT status, COUNT(*) AS count FROM consumer_deliveries
+         WHERE consumer_id = ? AND status IN ('pending', 'retry_wait') GROUP BY status`,
       )
-      .get(consumerId) as Record<string, unknown>;
+      .all(consumerId) as Array<Record<string, unknown>>;
+    const count = (status: string): number => Number(counts.find((row) => String(row.status) === status)?.count ?? 0);
     const failed = database
       .prepare("SELECT 1 FROM consumer_deliveries WHERE consumer_id = ? AND status IN ('failed', 'retry_wait') LIMIT 1")
       .get(consumerId);
-    return { pending: Number(pending.count), failed: failed !== undefined };
+    return { pending: count("pending"), retryWait: count("retry_wait"), failed: failed !== undefined };
   } finally {
     database.close();
   }
@@ -320,11 +331,18 @@ function pendingWork(
   kind: "source" | "consumer",
   eventConsumer: boolean,
   invocations: ReadonlyInvocation[],
-  deliveryPending: number,
-): number {
-  if (eventConsumer) return deliveryPending;
-  const states = kind === "consumer" ? ["pending", "retry_wait"] : ["pending", "running", "sleeping", "retry_wait"];
-  return invocations.filter(({ status }) => states.includes(status)).length;
+  deliveries: PendingBreakdown,
+): PendingBreakdown {
+  if (eventConsumer) return deliveries;
+  const states = kind === "consumer" ? ["pending"] : ["pending", "running", "sleeping"];
+  return {
+    pending: invocations.filter(({ status }) => states.includes(status)).length,
+    retryWait: invocations.filter(({ status }) => status === "retry_wait").length,
+  };
+}
+
+function totalPending(breakdown: PendingBreakdown): number {
+  return breakdown.pending + breakdown.retryWait;
 }
 
 /** Reads dashboard state without migrations, registration sync, schedule sync, or any other persistent write. */
@@ -351,8 +369,9 @@ export async function readProjectStatus(projectRoot: string): Promise<PluginStat
     const events = manifest.kind === "consumer" && manifest.trigger.type === "events";
     const deliveries = events
       ? readonlyDeliveryState(resolve(dataPath, "events.sqlite"), plugin.id)
-      : { pending: 0, failed: false };
+      : { pending: 0, retryWait: 0, failed: false };
     const failed = deliveries.failed || last?.status === "failed" || last?.status === "retry_wait";
+    const breakdown = pendingWork(plugin.kind, events, own, deliveries);
     return {
       id: plugin.id,
       kind: plugin.kind,
@@ -363,7 +382,8 @@ export async function readProjectStatus(projectRoot: string): Promise<PluginStat
       lastRunStartedAt: last ? new Date(last.createdAt).toISOString() : null,
       lastRunFinishedAt: last && last.status !== "running" ? new Date(last.updatedAt).toISOString() : null,
       lastInvocationId: null,
-      pending: pendingWork(plugin.kind, events, own, deliveries.pending),
+      pending: totalPending(breakdown),
+      pendingBreakdown: breakdown,
       failure: failed ? "Plugin execution failed" : null,
       lastRunStatus:
         last?.status === "completed" ? "completed" : last ? (last.status === "running" ? "running" : "failed") : null,
@@ -386,6 +406,7 @@ export async function readProjectStatus(projectRoot: string): Promise<PluginStat
       lastRunFinishedAt: null,
       lastInvocationId: null,
       pending: 0,
+      pendingBreakdown: { pending: 0, retryWait: 0 },
       failure: null,
       lastRunStatus: null,
       diagnostics: [
@@ -402,7 +423,8 @@ export async function readProjectStatus(projectRoot: string): Promise<PluginStat
     const eventConsumer = registration.kind === "consumer" && registration.manifest.trigger.type === "events";
     const deliveries = eventConsumer
       ? readonlyDeliveryState(resolve(dataPath, "events.sqlite"), registration.id)
-      : { pending: 0, failed: false };
+      : { pending: 0, retryWait: 0, failed: false };
+    const breakdown = pendingWork(registration.kind, eventConsumer, own, deliveries);
     statuses.push({
       id: registration.id,
       kind: registration.kind,
@@ -413,7 +435,8 @@ export async function readProjectStatus(projectRoot: string): Promise<PluginStat
       lastRunStartedAt: last ? new Date(last.createdAt).toISOString() : null,
       lastRunFinishedAt: last && last.status !== "running" ? new Date(last.updatedAt).toISOString() : null,
       lastInvocationId: null,
-      pending: pendingWork(registration.kind, eventConsumer, own, deliveries.pending),
+      pending: totalPending(breakdown),
+      pendingBreakdown: breakdown,
       failure: null,
       lastRunStatus:
         last?.status === "completed" ? "completed" : last ? (last.status === "running" ? "running" : "failed") : null,
@@ -421,6 +444,55 @@ export async function readProjectStatus(projectRoot: string): Promise<PluginStat
     });
   }
   return statuses;
+}
+
+export interface ProjectEvent {
+  id: string;
+  sourceId: string;
+  externalId: string;
+  type: string;
+  schemaVersion: number;
+  occurredAt: string;
+  observedAt: string;
+  payload: Json;
+}
+
+export interface ProjectEventQuery {
+  sourceId: string;
+  limit: number;
+}
+
+/**
+ * Reads stored event history for one source without migrations or any other persistent write, so a Web UI
+ * GET never creates or upgrades the event store. The column list is the public projection: nothing outside it
+ * reaches a response. Retention is unlimited here; the 24-hour source backfill default does not apply.
+ */
+export async function readProjectEvents(projectRoot: string, query: ProjectEventQuery): Promise<ProjectEvent[]> {
+  projectRoot = resolve(projectRoot);
+  const config = await loadProjectConfig(projectRoot);
+  const path = resolve(projectRoot, config.paths?.data ?? ".event-hub", "events.sqlite");
+  if (!existsSync(path)) return [];
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    const rows = database
+      .prepare(
+        `SELECT id, source_id, external_id, type, schema_version, occurred_at, observed_at, payload_json
+         FROM events WHERE source_id = ? ORDER BY occurred_at DESC, id DESC LIMIT ?`,
+      )
+      .all(query.sourceId, query.limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: String(row.id),
+      sourceId: String(row.source_id),
+      externalId: String(row.external_id),
+      type: String(row.type),
+      schemaVersion: Number(row.schema_version),
+      occurredAt: String(row.occurred_at),
+      observedAt: String(row.observed_at),
+      payload: JSON.parse(String(row.payload_json)) as Json,
+    }));
+  } finally {
+    database.close();
+  }
 }
 
 export async function updateInvocation(
