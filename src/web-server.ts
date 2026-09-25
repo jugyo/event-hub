@@ -9,7 +9,7 @@ import { readProjectStatus, type PluginStatus } from "./operations.ts";
 
 const LOOPBACK_HOST = "127.0.0.1";
 const DEFAULT_STATIC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "web");
-const EVENT_HUB_VERSION = "0.2.0";
+const EVENT_HUB_VERSION = "0.3.0";
 
 const contentTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
