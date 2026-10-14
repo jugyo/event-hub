@@ -398,12 +398,16 @@ test("serves stored events newest first and validates the event query", async (t
   assert.deepEqual(empty.events, []);
 
   for (const query of [
-    "",
-    "?limit=20",
     "?sourceId=source-a&limit=0",
     "?sourceId=source-a&limit=101",
     "?sourceId=source-a&limit=abc",
-    "?sourceId=source-a&type=example.changed",
+    "?sourceId=&limit=1",
+    "?type=",
+    "?cursor=abc",
+    "?from=2026-09-24",
+    "?to=not-a-date",
+    "?from=2026-09-25T00:00:00Z&to=2026-09-24T00:00:00Z",
+    "?from=2026-09-24T00:00:00Z&from=2026-09-25T00:00:00Z",
     "?sourceId=source-a&sourceId=source-b",
   ]) {
     const invalid = await fetch(`${server.url}/api/v1/events${query}`);
@@ -416,6 +420,64 @@ test("serves stored events newest first and validates the event query", async (t
 
   const post = await fetch(`${server.url}/api/v1/events?sourceId=source-a`, { method: "POST" });
   assert.equal(post.status, 405);
+});
+
+test("filters events by type and occurredAt window, and across every source", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub events filters "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initProject(root);
+  const store = new EventStore({ path: join(root, ".event-hub", "events.sqlite") });
+  store.migrate();
+  const event = (id: string, externalId: string, type: string, occurredAt: string) => ({
+    id,
+    externalId,
+    type,
+    schemaVersion: 1,
+    occurredAt,
+    observedAt: "2026-09-25T00:00:00.000Z",
+    payload: null,
+  });
+  store.appendSourceBatch({
+    sourceId: "source-a",
+    expectedCursor: null,
+    nextCursor: null,
+    updatedAt: "2026-09-25T00:00:00.000Z",
+    events: [
+      event("evt-old", "1", "example.changed", "2026-09-23T00:00:00.000Z"),
+      event("evt-mid", "2", "example.removed", "2026-09-24T00:00:00.000Z"),
+      event("evt-new", "3", "example.changed", "2026-09-25T00:00:00.000Z"),
+    ],
+  });
+  store.appendSourceBatch({
+    sourceId: "source-b",
+    expectedCursor: null,
+    nextCursor: null,
+    updatedAt: "2026-09-25T00:00:00.000Z",
+    events: [event("evt-other", "4", "example.changed", "2026-09-24T12:00:00.000Z")],
+  });
+  store.close();
+
+  const server = await startWebServer({ projectRoot: root, port: 0, staticRoot });
+  t.after(() => server.close());
+
+  const ids = async (query: string): Promise<string[]> => {
+    const response = await fetch(`${server.url}/api/v1/events${query}`);
+    assert.equal(response.status, 200, query);
+    const body = (await response.json()) as { events: Array<{ id: string }> };
+    return body.events.map(({ id }) => id);
+  };
+
+  assert.deepEqual(await ids(""), ["evt-new", "evt-other", "evt-mid", "evt-old"]);
+  assert.deepEqual(await ids("?type=example.removed"), ["evt-mid"]);
+  assert.deepEqual(await ids("?type=example.removed&type=example.changed"), [
+    "evt-new",
+    "evt-other",
+    "evt-mid",
+    "evt-old",
+  ]);
+  // The window is half-open, so an event exactly at `to` is excluded and one exactly at `from` is kept.
+  assert.deepEqual(await ids("?from=2026-09-24T00:00:00Z&to=2026-09-25T00:00:00Z"), ["evt-other", "evt-mid"]);
+  assert.deepEqual(await ids("?sourceId=source-a&type=example.changed&from=2026-09-24T00:00:00Z"), ["evt-new"]);
 });
 
 test("reads event history without creating the event store", async (t) => {

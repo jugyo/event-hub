@@ -9,7 +9,18 @@ import type { SecretBackend } from "./secrets/backend.ts";
 import { KeychainSecretBackend } from "./secrets/keychain.ts";
 import { SecretConfigurationError, SecretService } from "./secrets/service.ts";
 import { registerLaunchAgent, unregisterLaunchAgent } from "./launch-agent.ts";
-import { projectStatus, tickProject, updateInvocation } from "./operations.ts";
+import {
+  normalizeEventTimestamp,
+  projectPlugins,
+  projectStatus,
+  readProjectEventTypes,
+  readProjectEvents,
+  tickProject,
+  updateInvocation,
+  type ProjectPlugin,
+} from "./operations.ts";
+import { COMMAND_HELP, GENERAL_HELP } from "./cli-help.ts";
+import type { Json } from "./storage/event-store.ts";
 import { JsonLogger } from "@jugyo/duex";
 import { TextLogger } from "./text-logger.ts";
 import { serveWeb } from "./web-server.ts";
@@ -78,17 +89,83 @@ function defaultDependencies(): CliDependencies {
   };
 }
 
+const DEFAULT_EVENT_LIMIT = 20;
+
 function usage(error: (message: string) => void): number {
-  error("Usage: event-hub init [directory]");
-  error("          event-hub tick [--root <directory>] [--max-runs <n>] [--debug] [--json]");
-  error("          event-hub status [--root <directory>] [--json]");
-  error("          event-hub web [--root <directory>] [--port <number>]");
-  error("          event-hub invocation retry|cancel <id> [--root <directory>] [--json]");
-  error("          event-hub launch-agent register|unregister [--root <directory>] [--debug]");
-  error("          event-hub secret add|update <reference>");
-  error("          event-hub secret list");
-  error("          event-hub secret delete <reference>");
+  error(GENERAL_HELP.trimEnd());
   return 2;
+}
+
+function triggerSummary(trigger: Json | null): string {
+  if (trigger === null || typeof trigger !== "object" || Array.isArray(trigger)) return "-";
+  const type = String(trigger.type);
+  if (type === "poll") return `poll every ${String(trigger.everyMs)}ms`;
+  if (type === "events") return `events ${(trigger.eventTypes as string[]).join(",")}`;
+  if (type === "daily") return `daily ${String(trigger.at)} ${String(trigger.timezone)}`;
+  return type;
+}
+
+/** The plugin list omits the manifest configuration; `plugins <id>` is where that detail is requested. */
+function listedPlugin(plugin: ProjectPlugin) {
+  return {
+    id: plugin.id,
+    kind: plugin.kind,
+    state: plugin.state,
+    trigger: plugin.trigger,
+    lastRunAt: plugin.lastRunAt,
+    failure: plugin.failure,
+    directory: plugin.directory,
+    entrypoint: plugin.entrypoint,
+  };
+}
+
+function pluginLine(plugin: ProjectPlugin): string {
+  return [
+    plugin.id,
+    plugin.kind,
+    plugin.state,
+    triggerSummary(plugin.trigger),
+    `lastRun=${plugin.lastRunAt ?? "-"}`,
+    `directory=${plugin.directory ?? "-"}`,
+    `entry=${plugin.entrypoint ?? "-"}`,
+    ...(plugin.failure ? [`failure=${plugin.failure}`] : []),
+  ].join("\t");
+}
+
+function pluginDetail(plugin: ProjectPlugin): string {
+  return [
+    `id: ${plugin.id}`,
+    `kind: ${plugin.kind}`,
+    `state: ${plugin.state}`,
+    `trigger: ${triggerSummary(plugin.trigger)}`,
+    `lastRun: ${plugin.lastRunAt ?? "-"}`,
+    `failure: ${plugin.failure ?? "-"}`,
+    `directory: ${plugin.directory ?? "-"}`,
+    `entry: ${plugin.entrypoint ?? "-"}`,
+    `config: ${JSON.stringify(plugin.config)}`,
+    `env: ${JSON.stringify(plugin.env)}`,
+  ].join("\n");
+}
+
+/** Validates the half-open `[from, to)` window so an unusable bound fails instead of silently matching nothing. */
+function eventWindow(from?: string, to?: string): { from?: string; to?: string } {
+  const window: { from?: string; to?: string } = {};
+  for (const [option, value] of [
+    ["--from", from],
+    ["--to", to],
+  ] as const) {
+    if (value === undefined) continue;
+    const normalized = normalizeEventTimestamp(value);
+    if (normalized === null) {
+      throw new Error(`${option} must be a UTC ISO 8601 string such as 2026-10-01T00:00:00Z`);
+    }
+    if (option === "--from") window.from = normalized;
+    else window.to = normalized;
+  }
+  if (window.from !== undefined && window.to !== undefined && window.from >= window.to) {
+    throw new Error("--from must be earlier than --to");
+  }
+  return window;
 }
 
 export async function run(argv = process.argv.slice(2), dependencies = defaultDependencies()): Promise<number> {
@@ -103,9 +180,16 @@ export async function run(argv = process.argv.slice(2), dependencies = defaultDe
   }
   const parsed = parseOptions(argv);
   if (!parsed) return usage(dependencies.error);
-  const { positionals, root, json, debug, maxRuns, port } = parsed;
+  const { positionals, root, json, debug, help, maxRuns, port, source, types, from, to, limit } = parsed;
   const [command, subject, name, ...extra] = positionals;
   const projectRoot = resolve(root ?? dependencies.projectRoot);
+  if (help) {
+    const text = command === undefined ? GENERAL_HELP : COMMAND_HELP[command];
+    if (text === undefined) return usage(dependencies.error);
+    dependencies.out(text.trimEnd());
+    return 0;
+  }
+  const inspectOptions = source !== undefined || types.length > 0 || from !== undefined || to !== undefined;
 
   try {
     if (command === "init" && name === undefined && extra.length === 0) {
@@ -133,10 +217,65 @@ export async function run(argv = process.argv.slice(2), dependencies = defaultDe
       }
       return 0;
     }
-    if (port !== undefined) return usage(dependencies.error);
+    if (command === "types" && subject === undefined && !debug && maxRuns === undefined && port === undefined) {
+      if (types.length > 0 || from !== undefined || to !== undefined || limit !== undefined) {
+        return usage(dependencies.error);
+      }
+      const summaries = await readProjectEventTypes(projectRoot, { sourceId: source });
+      if (json) dependencies.out(JSON.stringify({ types: summaries }));
+      else if (summaries.length === 0) dependencies.out("No events found");
+      else
+        for (const summary of summaries) {
+          dependencies.out(
+            [
+              summary.sourceId,
+              summary.type,
+              `schemaVersion=${summary.schemaVersion}`,
+              `count=${summary.count}`,
+              `first=${summary.firstOccurredAt}`,
+              `last=${summary.lastOccurredAt}`,
+            ].join("\t"),
+          );
+          dependencies.out(`\tsample=${JSON.stringify(summary.samplePayload)}`);
+        }
+      return 0;
+    }
+    if (command === "events" && subject === undefined && !debug && maxRuns === undefined && port === undefined) {
+      const window = eventWindow(from, to);
+      const events = await readProjectEvents(projectRoot, {
+        sourceId: source,
+        types: types.length > 0 ? types : undefined,
+        from: window.from,
+        to: window.to,
+        limit: limit ?? DEFAULT_EVENT_LIMIT,
+      });
+      // One event per line in both formats, so `--json` output pipes straight into jq.
+      if (json) for (const event of events) dependencies.out(JSON.stringify(event));
+      else if (events.length === 0) dependencies.out("No events found");
+      else
+        for (const event of events)
+          dependencies.out(
+            [event.occurredAt, event.sourceId, event.type, event.id, JSON.stringify(event.payload)].join("\t"),
+          );
+      return 0;
+    }
+    if (port !== undefined || inspectOptions || limit !== undefined) return usage(dependencies.error);
     const backend =
       dependencies.backend ?? dependencies.createBackend?.(projectRoot) ?? new KeychainSecretBackend({ projectRoot });
     const secrets = new SecretService(projectRoot, backend);
+    if (command === "plugins" && name === undefined && extra.length === 0 && !debug && maxRuns === undefined) {
+      const plugins = await projectPlugins(projectRoot, secrets);
+      if (subject !== undefined) {
+        const plugin = plugins.find((candidate) => candidate.id === subject);
+        if (!plugin) throw new Error(`Plugin not found: ${subject}`);
+        dependencies.out(json ? JSON.stringify({ plugin }) : pluginDetail(plugin));
+        return 0;
+      }
+      if (json) dependencies.out(JSON.stringify({ plugins: plugins.map(listedPlugin) }));
+      else if (plugins.length === 0) dependencies.out("No plugins found");
+      else for (const plugin of plugins) dependencies.out(pluginLine(plugin));
+      return 0;
+    }
     if (command === "tick" && subject === undefined) {
       // `--json` keeps stdout parseable, so its diagnostics stay JSON Lines on stderr.
       const level = debug ? "debug" : "info";
@@ -226,19 +365,50 @@ function parseOptions(argv: string[]): {
   root?: string;
   json: boolean;
   debug: boolean;
+  help: boolean;
   maxRuns?: number;
   port?: number;
+  source?: string;
+  types: string[];
+  from?: string;
+  to?: string;
+  limit?: number;
 } | null {
   const positionals: string[] = [];
+  const types: string[] = [];
   let root: string | undefined;
   let maxRuns: number | undefined;
   let port: number | undefined;
+  let source: string | undefined;
+  let from: string | undefined;
+  let to: string | undefined;
+  let limit: number | undefined;
   let json = false;
   let debug = false;
+  let help = false;
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--json") {
       json = true;
+      continue;
+    }
+    if (value === "--help" || value === "-h") {
+      help = true;
+      continue;
+    }
+    if (value === "--source" || value === "--type" || value === "--from" || value === "--to") {
+      const raw = argv[++index];
+      if (!raw) return null;
+      if (value === "--source") source = raw;
+      else if (value === "--type") types.push(raw);
+      else if (value === "--from") from = raw;
+      else to = raw;
+      continue;
+    }
+    if (value === "--limit") {
+      const raw = argv[++index];
+      limit = Number(raw);
+      if (!raw || !Number.isInteger(limit) || limit < 1) return null;
       continue;
     }
     if (value === "--debug") {
@@ -265,7 +435,7 @@ function parseOptions(argv: string[]): {
     if (value.startsWith("--")) return null;
     positionals.push(value);
   }
-  return { positionals, root, json, debug, maxRuns, port };
+  return { positionals, root, json, debug, help, maxRuns, port, source, types, from, to, limit };
 }
 
 if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(resolve(process.argv[1]))) {

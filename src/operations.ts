@@ -255,6 +255,7 @@ type ReadonlyRegistration = {
   id: string;
   kind: "source" | "consumer";
   directory: string;
+  entrypoint: string;
   manifest: NormalizedPluginManifest;
   active: boolean;
 };
@@ -308,6 +309,7 @@ function readonlyRegistrations(path: string): ReadonlyRegistration[] {
       id: String(row.plugin_id),
       kind: String(row.kind) as "source" | "consumer",
       directory: String(row.directory),
+      entrypoint: String(row.entrypoint),
       manifest: JSON.parse(String(row.manifest_json)) as NormalizedPluginManifest,
       active: Number(row.active) === 1,
     }));
@@ -458,14 +460,55 @@ export interface ProjectEvent {
 }
 
 export interface ProjectEventQuery {
-  sourceId: string;
+  sourceId?: string;
+  types?: string[];
+  from?: string;
+  to?: string;
   limit: number;
 }
 
+const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
+
 /**
- * Reads stored event history for one source without migrations or any other persistent write, so a Web UI
- * GET never creates or upgrades the event store. The column list is the public projection: nothing outside it
- * reaches a response. Retention is unlimited here; the 24-hour source backfill default does not apply.
+ * Returns the canonical form of a UTC ISO 8601 timestamp, or `null` when the value is not one. Stored
+ * `occurredAt` values are canonical, so a window bound must be canonicalized before it is compared as text.
+ */
+export function normalizeEventTimestamp(value: string): string | null {
+  if (!UTC_TIMESTAMP_PATTERN.test(value) || Number.isNaN(Date.parse(value))) return null;
+  return new Date(value).toISOString();
+}
+
+/** Builds the shared `occurredAt` window and exact-match filters. Every omitted filter widens the result. */
+function eventFilters(query: Pick<ProjectEventQuery, "sourceId" | "types" | "from" | "to">): {
+  clause: string;
+  values: Array<string>;
+} {
+  const conditions: string[] = [];
+  const values: string[] = [];
+  if (query.sourceId !== undefined) {
+    conditions.push("source_id = ?");
+    values.push(query.sourceId);
+  }
+  if (query.types !== undefined && query.types.length > 0) {
+    conditions.push(`type IN (${query.types.map(() => "?").join(", ")})`);
+    values.push(...query.types);
+  }
+  if (query.from !== undefined) {
+    conditions.push("occurred_at >= ?");
+    values.push(query.from);
+  }
+  if (query.to !== undefined) {
+    conditions.push("occurred_at < ?");
+    values.push(query.to);
+  }
+  return { clause: conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "", values };
+}
+
+/**
+ * Reads stored event history without migrations or any other persistent write, so a Web UI GET never creates
+ * or upgrades the event store. The column list is the public projection: nothing outside it reaches a
+ * response. Retention is unlimited here; the 24-hour source backfill default does not apply. This is the only
+ * event search in the project; the Web API and the CLI both go through it.
  */
 export async function readProjectEvents(projectRoot: string, query: ProjectEventQuery): Promise<ProjectEvent[]> {
   projectRoot = resolve(projectRoot);
@@ -474,12 +517,13 @@ export async function readProjectEvents(projectRoot: string, query: ProjectEvent
   if (!existsSync(path)) return [];
   const database = new DatabaseSync(path, { readOnly: true });
   try {
+    const { clause, values } = eventFilters(query);
     const rows = database
       .prepare(
         `SELECT id, source_id, external_id, type, schema_version, occurred_at, observed_at, payload_json
-         FROM events WHERE source_id = ? ORDER BY occurred_at DESC, id DESC LIMIT ?`,
+         FROM events${clause} ORDER BY occurred_at DESC, id DESC LIMIT ?`,
       )
-      .all(query.sourceId, query.limit) as Array<Record<string, unknown>>;
+      .all(...values, query.limit) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       id: String(row.id),
       sourceId: String(row.source_id),
@@ -493,6 +537,101 @@ export async function readProjectEvents(projectRoot: string, query: ProjectEvent
   } finally {
     database.close();
   }
+}
+
+export interface ProjectEventTypeSummary {
+  sourceId: string;
+  type: string;
+  schemaVersion: number;
+  count: number;
+  firstOccurredAt: string;
+  lastOccurredAt: string;
+  samplePayload: Json;
+}
+
+/**
+ * Groups stored events by `(sourceId, type, schemaVersion)` and samples the newest payload of each group.
+ * The sample is the only description of a payload shape: the manifest declares no schema, so the event data
+ * and the plugin code stay the source of truth.
+ */
+export async function readProjectEventTypes(
+  projectRoot: string,
+  query: { sourceId?: string } = {},
+): Promise<ProjectEventTypeSummary[]> {
+  projectRoot = resolve(projectRoot);
+  const config = await loadProjectConfig(projectRoot);
+  const path = resolve(projectRoot, config.paths?.data ?? ".event-hub", "events.sqlite");
+  if (!existsSync(path)) return [];
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    const { clause, values } = eventFilters(query);
+    const rows = database
+      .prepare(
+        `SELECT source_id, type, schema_version, COUNT(*) AS count,
+                MIN(occurred_at) AS first_occurred_at, MAX(occurred_at) AS last_occurred_at,
+                (SELECT payload_json FROM events AS sample
+                  WHERE sample.source_id = events.source_id AND sample.type = events.type
+                    AND sample.schema_version = events.schema_version
+                  ORDER BY sample.occurred_at DESC, sample.id DESC LIMIT 1) AS sample_payload_json
+         FROM events${clause}
+         GROUP BY source_id, type, schema_version
+         ORDER BY source_id, type, schema_version`,
+      )
+      .all(...values) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      sourceId: String(row.source_id),
+      type: String(row.type),
+      schemaVersion: Number(row.schema_version),
+      count: Number(row.count),
+      firstOccurredAt: String(row.first_occurred_at),
+      lastOccurredAt: String(row.last_occurred_at),
+      samplePayload: JSON.parse(String(row.sample_payload_json)) as Json,
+    }));
+  } finally {
+    database.close();
+  }
+}
+
+export interface ProjectPlugin {
+  id: string;
+  kind: "source" | "consumer" | "invalid";
+  state: "ready" | "failed" | "invalid";
+  trigger: Json | null;
+  lastRunAt: string | null;
+  failure: string | null;
+  directory: string | null;
+  entrypoint: string | null;
+  config: Json | null;
+  /** Host-reference-to-plugin environment mappings. These are reference names only; no secret value is read. */
+  env: Record<string, string>;
+}
+
+/**
+ * Pairs the operational state from `projectStatus` with the code location recorded at registration, so an
+ * agent can go from a plugin ID to the files that define its behavior.
+ */
+export async function projectPlugins(projectRoot: string, secrets: SecretProvider): Promise<ProjectPlugin[]> {
+  projectRoot = resolve(projectRoot);
+  const statuses = await projectStatus(projectRoot, secrets);
+  const config = await loadProjectConfig(projectRoot);
+  const dataPath = resolve(projectRoot, config.paths?.data ?? ".event-hub");
+  const registrations = readonlyRegistrations(resolve(dataPath, "events.sqlite"));
+  return statuses.map((status) => {
+    const registration = registrations.find((candidate) => candidate.id === status.id);
+    const manifest = registration?.manifest;
+    return {
+      id: status.id,
+      kind: status.kind,
+      state: status.state,
+      trigger: (manifest?.trigger ?? null) as Json | null,
+      lastRunAt: status.lastRunAt,
+      failure: status.failure,
+      directory: registration?.directory ?? null,
+      entrypoint: registration?.entrypoint ?? null,
+      config: manifest?.config ?? null,
+      env: manifest?.env ?? {},
+    };
+  });
 }
 
 export async function updateInvocation(

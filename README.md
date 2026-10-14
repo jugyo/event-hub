@@ -34,6 +34,27 @@ event-hub status
 event-hub status --json
 ```
 
+Read the registered plugins and the stored events from the command line, without starting the server:
+
+```console
+event-hub plugins
+event-hub plugins <plugin-id> --json
+event-hub types --source <source-id> --json
+event-hub events --source <source-id> --type <event-type> --json | jq
+```
+
+`plugins` prints each plugin with its kind, state, trigger, and the absolute path of its directory
+and entry file; adding a plugin ID also prints the manifest configuration and the environment
+variable reference names. `types` groups stored events by `(sourceId, type, schemaVersion)` with a
+count, the `occurredAt` range, and the newest payload as a sample. `events` lists the events
+themselves, newest first, filtered by `--source`, a repeatable `--type`, the half-open
+`--from`/`--to` window, and `--limit`; with `--json` it prints one event per line.
+
+No payload schema is declared in a manifest. The plugin code is the source of truth for what a
+payload means, and `types` reports only what is actually stored. Run `event-hub --help` to see how
+these commands build on each other, and `event-hub <command> --help` for one command's options and
+output fields.
+
 Start the read-only Web UI for the current project at `http://127.0.0.1:3000`:
 
 ```console

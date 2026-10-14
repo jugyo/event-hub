@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { CONFIG_FILENAME } from "./init.ts";
 import {
+  normalizeEventTimestamp,
   readProjectEvents,
   readProjectStatus,
   type PluginStatus,
@@ -17,7 +18,8 @@ const LOOPBACK_HOST = "127.0.0.1";
 const DEFAULT_STATIC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "web");
 const EVENT_HUB_VERSION = "0.3.0";
 const PLUGIN_DETAIL_PREFIX = "/api/v1/plugins/";
-const EVENT_QUERY_FIELDS = new Set(["sourceId", "limit"]);
+const EVENT_QUERY_FIELDS = new Set(["sourceId", "type", "from", "to", "limit"]);
+const REPEATABLE_EVENT_QUERY_FIELDS = new Set(["type"]);
 const DEFAULT_EVENT_LIMIT = 20;
 const MAX_EVENT_LIMIT = 100;
 
@@ -78,13 +80,30 @@ function invalidQuery(response: import("node:http").ServerResponse, fields: stri
   sendJson(response, 400, { error: { code: "INVALID_QUERY", message: "Invalid query", details: { fields } } });
 }
 
-/** Returns the enumerated field names that make an event query ambiguous or out of range, newest-first paging aside. */
+/**
+ * Returns the enumerated field names that make an event query ambiguous or out of range, newest-first paging
+ * aside. Every filter is optional; omitting one widens the result rather than failing.
+ */
 function invalidEventFields(params: URLSearchParams): string[] {
   const fields = new Set<string>();
   for (const key of params.keys()) {
-    if (!EVENT_QUERY_FIELDS.has(key) || params.getAll(key).length > 1) fields.add(key);
+    const repeated = params.getAll(key).length > 1;
+    if (!EVENT_QUERY_FIELDS.has(key) || (repeated && !REPEATABLE_EVENT_QUERY_FIELDS.has(key))) fields.add(key);
   }
-  if (!params.get("sourceId")) fields.add("sourceId");
+  if (params.has("sourceId") && !params.get("sourceId")) fields.add("sourceId");
+  if (params.getAll("type").some((type) => type.length === 0)) fields.add("type");
+  const window: Record<"from" | "to", string | null> = { from: null, to: null };
+  for (const bound of ["from", "to"] as const) {
+    const raw = params.get(bound);
+    if (raw === null) continue;
+    const normalized = normalizeEventTimestamp(raw);
+    if (normalized === null) fields.add(bound);
+    else window[bound] = normalized;
+  }
+  if (window.from !== null && window.to !== null && window.from >= window.to) {
+    fields.add("from");
+    fields.add("to");
+  }
   const limit = params.get("limit");
   if (limit !== null && !(/^\d+$/u.test(limit) && Number(limit) >= 1 && Number(limit) <= MAX_EVENT_LIMIT)) {
     fields.add("limit");
@@ -193,8 +212,12 @@ export async function startWebServer(options: WebServerOptions): Promise<Running
             return;
           }
           const limit = Number(url.searchParams.get("limit") ?? DEFAULT_EVENT_LIMIT);
+          const types = url.searchParams.getAll("type");
           const events = await eventsProvider(options.projectRoot, {
-            sourceId: url.searchParams.get("sourceId")!,
+            sourceId: url.searchParams.get("sourceId") ?? undefined,
+            types: types.length > 0 ? types : undefined,
+            from: normalizeEventTimestamp(url.searchParams.get("from") ?? "") ?? undefined,
+            to: normalizeEventTimestamp(url.searchParams.get("to") ?? "") ?? undefined,
             limit,
           });
           // Paging is not part of this endpoint yet, so the contract's cursor is always absent.
