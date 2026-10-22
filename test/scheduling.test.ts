@@ -280,3 +280,74 @@ export async function execute(ctx, input) {
   assert.equal(runtime.listSchedules().length, 2);
   runtime.close();
 });
+
+test("gives source schedules a per-source lane and backfills it on schedules created without one", () => {
+  const store = new SqliteStore({ path: ":memory:" });
+  const runtime = new RuntimeApi({
+    store,
+    registry: new WorkflowRegistry(workflows),
+    now: () => NOW,
+  });
+  runtime.init();
+  const eventStore = new EventStore({ path: ":memory:" });
+  eventStore.migrate();
+  const plugins = [
+    registration("github", "source", { type: "poll", everyMs: 60_000 }),
+    registration("digest", "consumer", {
+      type: "daily",
+      at: "09:00",
+      timezone: "Asia/Tokyo",
+    }),
+  ];
+  const sync = () =>
+    syncPluginSchedules({
+      runtime,
+      store: eventStore,
+      secrets,
+      plugins,
+      sourceWorkflow: "source",
+      dailyConsumerWorkflow: "daily",
+    });
+
+  sync();
+  assert.equal(runtime.getSchedule("plugin:source:github").lane, "plugin:source:github");
+  // Daily consumers stay outside the lane so their deliveries are not serialized against each other.
+  assert.equal(runtime.getSchedule("plugin:consumer:digest").lane, null);
+
+  // A project that ran before the lane existed keeps its schedule, so the drift check has to restore it.
+  runtime.store.updateSchedule("plugin:source:github", { lane: null, updatedAt: NOW });
+  assert.deepEqual(sync().updated, ["plugin:source:github"]);
+  assert.equal(runtime.getSchedule("plugin:source:github").lane, "plugin:source:github");
+  assert.equal(runtime.getSchedule("plugin:source:github").nextRunAt, NOW + 60_000);
+  assert.deepEqual(sync(), { created: [], updated: [], disabled: [] });
+  runtime.close();
+  eventStore.close();
+});
+
+test("materialized source invocations carry the schedule's lane", async () => {
+  const store = new SqliteStore({ path: ":memory:" });
+  let clock = NOW;
+  const runtime = new RuntimeApi({
+    store,
+    registry: new WorkflowRegistry(workflows),
+    now: () => clock,
+  });
+  runtime.init();
+  const eventStore = new EventStore({ path: ":memory:" });
+  eventStore.migrate();
+  syncPluginSchedules({
+    runtime,
+    store: eventStore,
+    secrets,
+    plugins: [registration("github", "source", { type: "poll", everyMs: 60_000 })],
+    sourceWorkflow: "source",
+    dailyConsumerWorkflow: "daily",
+  });
+
+  clock += 60_000;
+  runtime.materializeSchedules();
+  const [invocation] = runtime.listInvocations({ scheduleId: "plugin:source:github" });
+  assert.equal(invocation.lane, "plugin:source:github");
+  runtime.close();
+  eventStore.close();
+});

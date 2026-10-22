@@ -111,6 +111,9 @@ export function syncPluginSchedules(options: SyncPluginSchedulesOptions): SyncPl
           id,
           workflow: sourceWorkflow,
           input,
+          // One schedule per source plugin, so its id serializes that source's polls against each other
+          // while leaving polls of other sources free to run at the same time.
+          lane: id,
           every: everyMs,
           catchUp: "latest",
         });
@@ -119,12 +122,14 @@ export function syncPluginSchedules(options: SyncPluginSchedulesOptions): SyncPl
         existing.scheduleType !== "interval" ||
         existing.everyMs !== everyMs ||
         existing.workflowName !== sourceWorkflow ||
+        existing.lane !== id ||
         !sameInput(existing, plugin.id) ||
         !existing.enabled
       ) {
         options.runtime.store.updateSchedule(id, {
           workflowName: sourceWorkflow,
           input,
+          lane: id,
           everyMs,
           scheduleType: "interval",
           dailyAt: null,

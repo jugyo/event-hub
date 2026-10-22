@@ -149,6 +149,7 @@ test("reports saved missing and disabled consumers and counts only pending and r
       status,
       availableAt: now,
       idempotencyKey: null,
+      lane: null,
       scheduleId: null,
       scheduledAt: null,
       scheduledFrom: null,

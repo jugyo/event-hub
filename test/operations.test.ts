@@ -10,7 +10,7 @@ import { openProjectRuntime, projectStatus, tickProject } from "../src/operation
 import { run } from "../src/cli.ts";
 import type { SecretBackend } from "../src/secrets/backend.ts";
 import { EventStore, type Json } from "../src/storage/event-store.ts";
-import { EVENT_CONSUMER_WORKFLOW } from "../src/workflows.ts";
+import { EVENT_CONSUMER_WORKFLOW, SOURCE_POLL_WORKFLOW } from "../src/workflows.ts";
 import type { InvocationRecord, TickResult } from "@jugyo/duex";
 
 const secrets = { get: () => undefined };
@@ -601,6 +601,7 @@ test("status counts pending invocations beyond 10,000 without truncation", async
         status: retrying ? "retry_wait" : "pending",
         availableAt: now,
         idempotencyKey: null,
+        lane: null,
         scheduleId: "plugin:source:many",
         scheduledAt: null,
         scheduledFrom: null,
@@ -654,4 +655,192 @@ test("uses the project root selected by --root to create the default backend", a
   assert.equal(result, 0);
   assert.deepEqual(roots, [root]);
   assert.deepEqual(JSON.parse(output[0]), { plugins: [] });
+});
+
+async function sourcePlugin(
+  root: string,
+  id: string,
+  source: string,
+  trigger: Json = { type: "poll", everyMs: 60_000 },
+): Promise<void> {
+  const directory = join(root, "sources", id);
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, "plugin.json"),
+    `${JSON.stringify({ id, kind: "source", entry: "index.mjs", config: null, env: {}, trigger })}\n`,
+  );
+  await writeFile(join(directory, "index.mjs"), source);
+}
+
+async function setConcurrency(root: string, concurrency: unknown): Promise<void> {
+  const path = join(root, "event-hub.json");
+  const config = JSON.parse(await readFile(path, "utf8"));
+  await writeFile(path, `${JSON.stringify({ ...config, runner: { concurrency } }, null, 2)}\n`);
+}
+
+/** Brings the named source schedules forward so the next tick materializes them. */
+async function makeSourcesDue(root: string, ...ids: string[]): Promise<void> {
+  const project = await openProjectRuntime(root, secrets);
+  try {
+    for (const id of ids) {
+      project.runtime.store.updateSchedule(`plugin:source:${id}`, {
+        nextRunAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    }
+  } finally {
+    project.close();
+  }
+}
+
+test("rejects a runner concurrency that is not a positive integer", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub concurrency config "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initProject(root);
+
+  for (const invalid of [0, -1, 1.5, "2"]) {
+    await setConcurrency(root, invalid);
+    await assert.rejects(tickProject(root, secrets), /runner\.concurrency must be an integer of at least 1/u);
+  }
+  await setConcurrency(root, 2);
+  assert.deepEqual((await tickProject(root, secrets)).runs, []);
+});
+
+test("a slow source does not hold back the polls of other sources when concurrency allows both", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub source concurrency "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initProject(root);
+  await setConcurrency(root, 2);
+  const log = join(root, "rendezvous.log");
+  // Each source waits for the other to start polling, so a serial runner can only report timeouts
+  // whatever order it picks, while two lanes running at once let both sources see their peer.
+  const rendezvous = (id: string, peer: string): string =>
+    `import { appendFile, writeFile, access } from "node:fs/promises";
+import { join } from "node:path";
+export const execute = ctx => ctx.run("fetch", async () => {
+  await writeFile(join(${JSON.stringify(root)}, ${JSON.stringify(`${id}.started`)}), "");
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      await access(join(${JSON.stringify(root)}, ${JSON.stringify(`${peer}.started`)}));
+      await appendFile(${JSON.stringify(log)}, ${JSON.stringify(`${id}:peer-seen\n`)});
+      return { events: [], nextCursor: null, hasMore: false };
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+  await appendFile(${JSON.stringify(log)}, ${JSON.stringify(`${id}:timeout\n`)});
+  return { events: [], nextCursor: null, hasMore: false };
+});\n`;
+  await sourcePlugin(root, "slow", rendezvous("slow", "quick"));
+  await sourcePlugin(root, "quick", rendezvous("quick", "slow"));
+  await makeSourcesDue(root, "slow", "quick");
+
+  const tick = await tickProject(root, secrets);
+  assert.deepEqual(
+    outcomes(tick),
+    [
+      { workflow: "event-hub.source.poll", outcome: "completed" },
+      { workflow: "event-hub.source.poll", outcome: "completed" },
+    ],
+    JSON.stringify(tick.runs),
+  );
+  assert.deepEqual((await lines(log)).sort(), ["quick:peer-seen", "slow:peer-seen"]);
+});
+
+test("two polls of the same source never overlap even when concurrency allows two runs", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub source lane "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initProject(root);
+  await setConcurrency(root, 2);
+  const log = join(root, "overlap.log");
+  await sourcePlugin(
+    root,
+    "serial",
+    `import { appendFile } from "node:fs/promises";
+export const execute = ctx => ctx.run("fetch", async () => {
+  await appendFile(${JSON.stringify(log)}, "start\\n");
+  await new Promise(resolve => setTimeout(resolve, 150));
+  await appendFile(${JSON.stringify(log)}, "end\\n");
+  return { events: [], nextCursor: null, hasMore: false };
+});\n`,
+  );
+
+  const project = await openProjectRuntime(root, secrets);
+  const lane = project.runtime.getSchedule("plugin:source:serial").lane;
+  assert.equal(lane, "plugin:source:serial");
+  for (const attempt of ["first", "second"]) {
+    await project.runtime.invoke({
+      workflow: SOURCE_POLL_WORKFLOW,
+      input: { pluginId: "serial" },
+      idempotencyKey: `serial:${attempt}`,
+      lane,
+    });
+  }
+  project.close();
+
+  const tick = await tickProject(root, secrets);
+  assert.equal(tick.runs.length, 2, JSON.stringify(tick.runs));
+  assert.deepEqual(await lines(log), ["start", "end", "start", "end"]);
+});
+
+test("a retried poll keeps the window of its first attempt while the next slot gets its own", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub source retry window "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initProject(root);
+  await setConcurrency(root, 2);
+  const log = join(root, "windows.log");
+  await sourcePlugin(
+    root,
+    "flaky",
+    `import { appendFile, readFile, writeFile } from "node:fs/promises";
+const counter = ${JSON.stringify(join(root, "calls.txt"))};
+export const execute = (ctx, input) => ctx.run("fetch", async () => {
+  await appendFile(${JSON.stringify(log)}, input.to + "\\n");
+  const calls = Number(await readFile(counter, "utf8").catch(() => "0")) + 1;
+  await writeFile(counter, String(calls));
+  if (calls === 1) throw new Error("upstream is unreachable");
+  return {
+    events: [{
+      id: "evt-" + input.to, externalId: input.to, type: "example.changed", schemaVersion: 1,
+      occurredAt: input.to, observedAt: input.to, payload: null,
+    }],
+    nextCursor: input.to, hasMore: false,
+  };
+}, { retry: { maxAttempts: 2, initialDelayMs: 50 } });\n`,
+  );
+  await makeSourcesDue(root, "flaky");
+
+  // maxRuns stops the first tick after the failed attempt, so the retry is left for the next one.
+  await tickProject(root, secrets, 1);
+  const project = await openProjectRuntime(root, secrets);
+  assert.equal(project.runtime.listInvocations({ status: "retry_wait" }).length, 1);
+  project.close();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  // The next slot is due while the retry is still pending, so both are runnable in one tick.
+  await makeSourcesDue(root, "flaky");
+  const tick = await tickProject(root, secrets);
+
+  assert.deepEqual(
+    outcomes(tick),
+    [
+      { workflow: "event-hub.source.poll", outcome: "completed" },
+      { workflow: "event-hub.source.poll", outcome: "completed" },
+    ],
+    JSON.stringify(tick.runs),
+  );
+  const windows = await lines(log);
+  assert.equal(windows.length, 3, windows.join(" "));
+  // The retry replays the journaled poll time and reuses the open window instead of taking a fresh one.
+  assert.equal(windows[0], windows[1]);
+  assert.notEqual(windows[2], windows[1]);
+  withEventStore(root, (store) => {
+    const events = store.queryHistory({
+      from: new Date(0).toISOString(),
+      to: new Date(Date.now() + 60_000).toISOString(),
+    }).events;
+    assert.deepEqual(
+      events.map(({ externalId }) => externalId),
+      [windows[1], windows[2]],
+    );
+  });
 });

@@ -26,6 +26,16 @@ event-hub init "/path/to/project"
 
 Initialization creates `event-hub.json`, `sources/`, `consumers/`, and `.event-hub/`. It never overwrites an existing target.
 
+A tick runs one invocation at a time by default. Set `runner.concurrency` in `event-hub.json` to let polls of
+different sources run at the same time, so one slow source no longer holds back the others. Polls of the same
+source stay serial whatever the value is.
+
+```json
+{
+  "runner": { "concurrency": 4 }
+}
+```
+
 Run due work and inspect plugin state:
 
 ```console

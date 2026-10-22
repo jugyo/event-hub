@@ -22,6 +22,7 @@ import { CONFIG_FILENAME } from "./init.ts";
 interface ProjectConfig {
   paths?: { sources?: string; consumers?: string; data?: string };
   pluginManifest?: string;
+  runner?: { concurrency?: number };
 }
 
 export interface ProjectRuntime {
@@ -87,7 +88,12 @@ async function loadProjectConfig(projectRoot: string): Promise<ProjectConfig> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(`${CONFIG_FILENAME} must contain a JSON object`);
   }
-  return value as ProjectConfig;
+  const config = value as ProjectConfig;
+  const concurrency = config.runner?.concurrency;
+  if (concurrency !== undefined && (!Number.isInteger(concurrency) || concurrency < 1)) {
+    throw new Error(`${CONFIG_FILENAME} runner.concurrency must be an integer of at least 1`);
+  }
+  return config;
 }
 
 export async function openProjectRuntime(
@@ -106,6 +112,7 @@ export async function openProjectRuntime(
     store: new SqliteStore({ path: resolve(dataPath, "runtime.sqlite") }),
     registry: new WorkflowRegistry(),
     logger,
+    concurrency: config.runner?.concurrency,
   });
   runtime.init();
   try {

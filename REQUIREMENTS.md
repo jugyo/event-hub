@@ -125,6 +125,11 @@ Protocol violations, unknown or duplicate correlation IDs, incomplete steps at p
 
 Plugin exception messages, stacks, and arbitrary details are discarded at the IPC boundary because they may contain secrets. The host persists only enumerated public error codes and fixed messages.
 
+Polling runs serially per source and may run in parallel across sources. Each source's schedule serializes its own
+polls so a second poll never starts while the previous one is still running, and the project sets how many
+invocations a tick starts at once with `runner.concurrency` in `event-hub.json`. The default of 1 keeps the whole
+tick serial.
+
 External effects are at-least-once. A crash after an external effect but before journal completion may repeat the effect. Plugins should use an idempotency key derived from the invocation ID and step name where the external system supports one.
 
 ## Explicit non-goals
