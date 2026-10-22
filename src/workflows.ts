@@ -114,7 +114,7 @@ export function createPluginWorkflows(options: PluginWorkflowOptions): WorkflowD
                   input: pollInput as unknown as Json,
                   env: manifest.env,
                   secrets: options.secrets,
-                  timeoutMs: options.pluginTimeoutMs,
+                  timeoutMs: manifest.timeoutMs ?? options.pluginTimeoutMs,
                   logger,
                 }),
               ),
@@ -179,7 +179,7 @@ export function createPluginWorkflows(options: PluginWorkflowOptions): WorkflowD
             },
             env: manifest.env,
             secrets: options.secrets,
-            timeoutMs: options.pluginTimeoutMs,
+            timeoutMs: manifest.timeoutMs ?? options.pluginTimeoutMs,
             logger,
             onHistoryQuery: (page) => {
               historyEvents += page.events.length;
@@ -243,7 +243,7 @@ export function createPluginWorkflows(options: PluginWorkflowOptions): WorkflowD
           entry: plugin.entrypoint,
           env: manifest.env,
           secrets: options.secrets,
-          timeoutMs: options.pluginTimeoutMs,
+          timeoutMs: manifest.timeoutMs ?? options.pluginTimeoutMs,
           logger: options.logger,
         });
       },

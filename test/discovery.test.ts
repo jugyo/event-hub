@@ -244,6 +244,41 @@ test("normalizes source duration strings while preserving millisecond settings",
   }
 });
 
+test("validates an optional manifest timeout and diagnoses invalid values", async () => {
+  const root = await mkdtemp(join(tmpdir(), "event-hub timeout "));
+  const store = new EventStore({ path: ":memory:" });
+  try {
+    store.migrate();
+    await writePlugin(root, "sources", "valid-timeout", {
+      ...sourceManifest("source.valid-timeout"),
+      timeoutMs: 120_000,
+    });
+    const invalid = [0, -1, 1.5, "1000", 3_600_001];
+    await Promise.all(
+      invalid.map((timeoutMs, index) =>
+        writePlugin(root, "sources", `invalid-timeout-${index}`, {
+          ...sourceManifest(`source.invalid-timeout-${index}`),
+          timeoutMs,
+        }),
+      ),
+    );
+
+    const result = await discoverAndSyncPlugins({ projectRoot: root, store, now: T1 });
+
+    assert.deepEqual(
+      result.plugins.map(({ id }) => id),
+      ["source.valid-timeout"],
+    );
+    assert.equal((result.plugins[0]?.manifest as { timeoutMs?: number }).timeoutMs, 120_000);
+    assert.equal(result.diagnostics.length, invalid.length);
+    assert.ok(result.diagnostics.every(({ code }) => code === "MANIFEST_INVALID"));
+    assert.ok(result.diagnostics.every(({ message }) => message.includes("timeoutMs")));
+  } finally {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("diagnoses conflicting and invalid source durations per plugin", async () => {
   const root = await mkdtemp(join(tmpdir(), "event-hub invalid durations "));
   const store = new EventStore({ path: ":memory:" });

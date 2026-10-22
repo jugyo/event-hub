@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
-import { PluginProcessError, runPluginProcess } from "../src/index.ts";
+import { createPluginWorkflows, EventStore, PluginProcessError, runPluginProcess } from "../src/index.ts";
 import { defineWorkflow, InvocationRunner, JsonLogger, RuntimeApi, SqliteStore, WorkflowRegistry } from "@jugyo/duex";
 import type { WorkflowContext, WorkflowDefinition } from "@jugyo/duex";
 
@@ -293,5 +293,72 @@ for (const [name, source, code] of [
       (error: unknown) =>
         error instanceof PluginProcessError && error.code === code && !error.message.includes("hidden"),
     );
+  });
+}
+
+// Each case sets the project default on the opposite side of the manifest value, so reverting the
+// wiring to options.pluginTimeoutMs changes the observed behaviour: the hanging plugin would run for
+// the 5s default instead of its own 150ms, and the one-second plugin would be cut off by a 200ms one.
+for (const [name, timeoutMs, pluginTimeoutMs, body, expected] of [
+  ["exceeding its own manifest timeout", 150, 5_000, "return new Promise(() => {});", "plugin execution timed out"],
+  [
+    "finishing within its own manifest timeout",
+    5_000,
+    200,
+    "await new Promise((resolve) => setTimeout(resolve, 1_000)); return { events: [], nextCursor: null, hasMore: false };",
+    null,
+  ],
+] as const) {
+  test(`a source ${name} is bounded by the manifest value, not the project default`, async (t) => {
+    const entry = fileURLToPath(await fixture(t, `export async function execute(ctx, input) { ${body} }`));
+    const eventStore = new EventStore({ path: ":memory:" });
+    t.after(() => eventStore.close());
+    eventStore.migrate();
+    const manifest = {
+      id: "source.timeout",
+      kind: "source",
+      entry: "plugin.mjs",
+      config: null,
+      env: {},
+      trigger: { type: "poll", everyMs: 60_000 },
+      timeoutMs,
+    };
+    eventStore.syncPluginRegistrations(
+      [
+        {
+          id: manifest.id,
+          kind: "source",
+          directory: join(entry, ".."),
+          entrypoint: entry,
+          manifest,
+        },
+      ],
+      new Date(0).toISOString(),
+    );
+    const workflows = createPluginWorkflows({
+      store: eventStore,
+      secrets: secrets({}),
+      pluginTimeoutMs,
+      sourceWorkflow: "source-timeout",
+    }).filter(({ name: workflowName }) => workflowName === "source-timeout");
+    const harness = runtime(workflows);
+    t.after(() => harness.close());
+
+    const invocation = await harness.api.invoke({
+      workflow: "source-timeout",
+      input: { pluginId: manifest.id },
+    });
+    const startedAt = Date.now();
+    const result = await harness.runner.run(invocation.invocation.id);
+    const elapsed = Date.now() - startedAt;
+
+    if (expected === null) {
+      assert.equal(result.outcome, "completed");
+    } else {
+      assert.notEqual(result.outcome, "completed");
+      assert.match(JSON.stringify(result.invocation.error ?? ""), new RegExp(expected));
+      // The manifest value cut the plugin off, well before the project default would have.
+      assert.ok(elapsed < pluginTimeoutMs / 2, `timed out after ${elapsed}ms`);
+    }
   });
 }

@@ -8,6 +8,8 @@ interface PluginManifestBase {
   entry: string;
   config: Json;
   env: Record<string, string>;
+  /** Upper bound for one `execute()` call. Falls back to the project default when omitted. */
+  timeoutMs?: number;
 }
 
 type PollInterval = { every: DurationString; everyMs?: never } | { every?: never; everyMs: number };

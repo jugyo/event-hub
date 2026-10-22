@@ -103,7 +103,7 @@ IPC uses finite JSON discriminated-union messages and one child process per exec
 
 Inputs, outputs, step results, and retry metadata must be finite JSON values. Schema violations, unknown or duplicate correlation IDs, and concurrent step requests are terminal protocol violations. Both host and child verify that no step is unfinished when the plugin returns.
 
-A process exit, IPC disconnect, or the default 30-second timeout during a step becomes a retryable `ctx.run` failure. `@jugyo/duex` persists `retry_wait`; the next tick starts a new child. Completed journal steps return their stored result without another `step.execute`. Event consumers are the exception: the failure ends the delivery attempt, and delivery state schedules the retry as described above.
+A process exit, IPC disconnect, or the execution timeout becomes a retryable `ctx.run` failure. The timeout covers one whole `execute()` call, not each step: the timer starts when the child process spawns and is cleared only when the plugin completes or fails. A plugin sets its own bound with `timeoutMs` in its manifest (at most one hour); without it the project default of 30 seconds applies. A source polls one page per child process, so the bound applies per page. `@jugyo/duex` persists `retry_wait`; the next tick starts a new child. Completed journal steps return their stored result without another `step.execute`. Event consumers are the exception: the failure ends the delivery attempt, and delivery state schedules the retry as described above.
 
 An exit outside a step, import failure, execution failure, or protocol violation fails only that invocation and must not retain the runner lease.
 

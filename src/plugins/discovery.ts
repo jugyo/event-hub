@@ -49,6 +49,7 @@ const ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,127})$/;
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const CODE_EXTENSION_PATTERN = /\.(?:[cm]?[jt]s)$/;
 const DURATION_PATTERN = /^(\d+(?:\.\d+)?)(ms|s|m|h|d|w)$/;
+const MAX_TIMEOUT_MS = 60 * 60_000;
 const DURATION_UNIT_MS = {
   ms: 1,
   s: 1_000,
@@ -171,6 +172,12 @@ function parseManifest(value: unknown): NormalizedPluginManifest {
     )
   ) {
     throw new TypeError("env must map plugin environment variable names to host secret references");
+  }
+  if (value.timeoutMs !== undefined) {
+    if (typeof value.timeoutMs !== "number") throw new TypeError("timeoutMs must be a number of milliseconds");
+    if (validMilliseconds(value.timeoutMs, "timeoutMs") > MAX_TIMEOUT_MS) {
+      throw new TypeError(`timeoutMs cannot exceed ${MAX_TIMEOUT_MS} milliseconds`);
+    }
   }
   const trigger = normalizeTrigger(value.kind, value.trigger);
   return { ...value, trigger } as NormalizedPluginManifest;

@@ -86,9 +86,15 @@ Example polling source manifest:
   "entry": "index.mjs",
   "config": { "repository": "owner/name" },
   "env": { "API_TOKEN": "WORK_API_TOKEN" },
-  "trigger": { "type": "poll", "every": "1m", "backfill": "1d" }
+  "trigger": { "type": "poll", "every": "1m", "backfill": "1d" },
+  "timeoutMs": 120000
 }
 ```
+
+`timeoutMs` bounds one `execute()` call of this plugin: the host kills the child process and reports
+`PLUGIN_TIMEOUT` once it elapses. It must be a positive whole number of milliseconds and at most one
+hour. Omit it to use the project default of 30 seconds. A polling source runs one page per child
+process, so the bound applies per page rather than to the whole poll.
 
 Polling durations accept a positive number followed by `ms`, `s`, `m`, `h`, `d`, or `w` and must
 resolve to at least one whole millisecond. The numeric `everyMs` and `backfillMs` fields remain

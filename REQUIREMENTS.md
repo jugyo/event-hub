@@ -121,7 +121,7 @@ The host starts one Node.js child process per plugin execution. IPC uses finite 
 
 The child requests durable steps by name and retry metadata. The host maps one request at a time to `ctx.run(name, operation)`. Completed journal results are returned without re-executing the operation. Nested or concurrent context calls are rejected.
 
-Protocol violations, unknown or duplicate correlation IDs, incomplete steps at plugin completion, import failures, and execution failures are plugin-scoped errors. Process exit, disconnect, or the default 30-second timeout during a step is a retryable step failure subject to the `@jugyo/duex` retry policy.
+Protocol violations, unknown or duplicate correlation IDs, incomplete steps at plugin completion, import failures, and execution failures are plugin-scoped errors. Process exit, disconnect, or the execution timeout is a retryable step failure subject to the `@jugyo/duex` retry policy. The timeout bounds one whole `execute()` call rather than each step; a plugin sets its own bound with `timeoutMs` in its manifest, and the project default of 30 seconds applies when the manifest omits it.
 
 Plugin exception messages, stacks, and arbitrary details are discarded at the IPC boundary because they may contain secrets. The host persists only enumerated public error codes and fixed messages.
 
