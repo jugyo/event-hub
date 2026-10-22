@@ -16,7 +16,7 @@ import {
 
 const LOOPBACK_HOST = "127.0.0.1";
 const DEFAULT_STATIC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "web");
-const EVENT_HUB_VERSION = "0.3.0";
+const EVENT_HUB_VERSION = "0.4.0";
 const PLUGIN_DETAIL_PREFIX = "/api/v1/plugins/";
 const EVENT_QUERY_FIELDS = new Set(["sourceId", "type", "from", "to", "limit"]);
 const REPEATABLE_EVENT_QUERY_FIELDS = new Set(["type"]);
